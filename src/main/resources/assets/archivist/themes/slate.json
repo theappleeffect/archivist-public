@@ -1,0 +1,18 @@
+{
+  "name": "Slate",
+  "colors": {
+    "accent": "0xFF8888AA",
+    "accentDim": "0xFF505058",
+    "windowBackground": "0xBB18181C",
+    "textPrimary": "0xFFF0F0F0"
+  },
+  "gradient": {
+    "top": "0x55181820",
+    "bottom": "0x55060608"
+  },
+  "gradients": {
+    "titleBar": { "top": "0xDD2A2A32", "bottom": "0xDD0E0E12" },
+    "button": { "top": "0xFF222228", "bottom": "0xFF101014" },
+    "windowBackground": { "top": "0xBB1E1E24", "bottom": "0xBB101014" }
+  }
+}

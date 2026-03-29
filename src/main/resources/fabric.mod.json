@@ -1,0 +1,29 @@
+{
+	"schemaVersion": 1,
+	"id": "archivist",
+	"version": "${version}",
+	"name": "Archivist",
+	"description": "Automatically logs server plugins, brand, world info, and addresses on join.",
+	"authors": [
+		"apple"
+	],
+	"license": "MIT",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"com.archivist.ArchivistMod"
+		]
+	},
+	"mixins": [
+		{
+			"config": "archivist.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=${deps_fabric_loader}",
+		"fabric-api": "*",
+		"minecraft": "${minecraft_dep}",
+		"java": ">=21"
+	}
+}

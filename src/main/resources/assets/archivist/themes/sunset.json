@@ -1,0 +1,18 @@
+{
+  "name": "Sunset",
+  "colors": {
+    "accent": "0xFFFF7043",
+    "accentDim": "0xFFC0503A",
+    "windowBackground": "0xBB0F0F20",
+    "textPrimary": "0xFFFFEADD"
+  },
+  "gradient": {
+    "top": "0xBB101028",
+    "bottom": "0xBB050510"
+  },
+  "gradients": {
+    "titleBar": { "top": "0xDD2A1530", "bottom": "0xDD0A0810" },
+    "button": { "top": "0xFF251528", "bottom": "0xFF0E0A14" },
+    "windowBackground": { "top": "0xBB181020", "bottom": "0xBB0A0810" }
+  }
+}

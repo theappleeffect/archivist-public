@@ -1,0 +1,18 @@
+{
+  "name": "Midnight",
+  "colors": {
+    "accent": "0xFF40A0E0",
+    "accentDim": "0xFF2A6090",
+    "windowBackground": "0xBB080E1A",
+    "textPrimary": "0xFFDDEEFF"
+  },
+  "gradient": {
+    "top": "0xBB001028",
+    "bottom": "0xBB000008"
+  },
+  "gradients": {
+    "titleBar": { "top": "0xDD1A3055", "bottom": "0xDD050A14" },
+    "button": { "top": "0xFF152845", "bottom": "0xFF080E1A" },
+    "windowBackground": { "top": "0xBB0E1828", "bottom": "0xBB040810" }
+  }
+}

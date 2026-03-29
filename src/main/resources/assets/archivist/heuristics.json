@@ -1,0 +1,275 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "plugin": "AuctionHouse",
+      "namePatterns": ["auctionhouse", "auction house"],
+      "loreKeywords": ["click to bid", "buy it now", "browse auctions", "click to purchase!", "seller:"]
+    },
+    {
+      "plugin": "AzAuctionHouse",
+      "namePatterns": ["azauctionhouse", "az auction"],
+      "loreKeywords": ["click to bid", "buy it now", "auction by"]
+    },
+    {
+      "plugin": "CrazyAuctions",
+      "namePatterns": ["crazy auctions", "crazyauctions"],
+      "loreKeywords": ["click to buy", "expired auctions", "auction created"]
+    },
+    {
+      "plugin": "ShopGUI+",
+      "namePatterns": ["shopgui+", "shopgui"],
+      "loreKeywords": ["click to buy", "click to sell", "price:", "buy price:", "sell price:"]
+    },
+    {
+      "plugin": "EconomyShopGUI",
+      "namePatterns": ["economyshopgui", "economy shop"],
+      "loreKeywords": ["buy price:", "sell price:", "stock:", "click to trade"]
+    },
+    {
+      "plugin": "UltimateShop",
+      "namePatterns": ["ultimateshop", "ultimate shop"],
+      "loreKeywords": ["buy price:", "sell price:", "click to buy"]
+    },
+    {
+      "plugin": "GUIShop",
+      "namePatterns": ["guishop", "gui shop"],
+      "loreKeywords": ["buy:", "sell:", "click to buy", "click to sell"]
+    },
+    {
+      "plugin": "ChestShop",
+      "namePatterns": ["chestshop", "chest shop"],
+      "loreKeywords": ["buy price", "sell price", "quantity:"]
+    },
+    {
+      "plugin": "SellGUI",
+      "namePatterns": ["sellgui", "sell gui"],
+      "loreKeywords": ["click to sell all", "sell all items", "total value:"]
+    },
+    {
+      "plugin": "QuickSell",
+      "namePatterns": ["quicksell", "quick sell"],
+      "loreKeywords": ["sell all", "total price:", "click to sell"]
+    },
+    {
+      "plugin": "CrazyCrates",
+      "namePatterns": ["crazycrates", "crazy crates"],
+      "loreKeywords": ["chance:", "click to preview", "crate prize", "rarity:"]
+    },
+    {
+      "plugin": "ExcellentCrates",
+      "namePatterns": ["excellentcrates", "excellent crates"],
+      "loreKeywords": ["chance:", "click to preview", "crate reward"]
+    },
+    {
+      "plugin": "SpecializedCrates",
+      "namePatterns": ["specializedcrates", "specialized crates"],
+      "loreKeywords": ["chance:", "reward:", "crate key"]
+    },
+    {
+      "plugin": "TokenManager",
+      "namePatterns": ["tokenmanager", "token manager", "token shop"],
+      "loreKeywords": ["tokens:", "cost:", "token balance"]
+    },
+    {
+      "plugin": "EnderChest",
+      "namePatterns": ["enderchest", "ender chest"],
+      "loreKeywords": []
+    },
+    {
+      "plugin": "PlayerVaults",
+      "namePatterns": ["playervaults", "player vaults", "player vault"],
+      "loreKeywords": ["vault #", "click to open vault"]
+    },
+    {
+      "plugin": "BetterBackpacks",
+      "namePatterns": ["betterbackpacks", "backpack"],
+      "loreKeywords": ["backpack size:", "upgrade backpack"]
+    },
+    {
+      "plugin": "DeluxeMenus",
+      "namePatterns": ["deluxemenus", "deluxe menus"],
+      "loreKeywords": []
+    },
+    {
+      "plugin": "ChestCommands",
+      "namePatterns": ["chestcommands", "chest commands"],
+      "loreKeywords": []
+    },
+    {
+      "plugin": "PlayerWarps",
+      "namePatterns": ["playerwarps", "player warps", "warp menu"],
+      "loreKeywords": ["click to teleport", "warp owner:", "visits:", "warp rate"]
+    },
+    {
+      "plugin": "Jobs Reborn",
+      "namePatterns": ["jobs reborn", "jobs browse", "job browser"],
+      "loreKeywords": ["join job", "leave job", "income:", "experience:", "max level:"]
+    },
+    {
+      "plugin": "mcMMO",
+      "namePatterns": ["mcmmo"],
+      "loreKeywords": ["skill level:", "xp rate:", "ability:"]
+    },
+    {
+      "plugin": "Quests",
+      "namePatterns": ["quests", "quest menu"],
+      "loreKeywords": ["quest reward:", "quest progress:", "click to start quest", "objectives:"]
+    },
+    {
+      "plugin": "BetonQuest",
+      "namePatterns": ["betonquest", "beton quest"],
+      "loreKeywords": ["quest objective:", "quest status:"]
+    },
+    {
+      "plugin": "ProCosmetics",
+      "namePatterns": ["procosmetics", "pro cosmetics", "cosmetics menu"],
+      "loreKeywords": ["click to equip", "click to unequip", "cosmetic:", "unlocked"]
+    },
+    {
+      "plugin": "PlayerParticles",
+      "namePatterns": ["playerparticles", "player particles", "particle menu"],
+      "loreKeywords": ["click to apply", "particle effect:", "active effect:"]
+    },
+    {
+      "plugin": "PlayerKits",
+      "namePatterns": ["playerkits", "player kits", "kit menu"],
+      "loreKeywords": ["click to claim", "cooldown:", "kit contents:"]
+    },
+    {
+      "plugin": "EpicSpawners",
+      "namePatterns": ["epicspawners", "epic spawners", "spawner shop"],
+      "loreKeywords": ["spawner type:", "spawner level:", "click to upgrade"]
+    },
+    {
+      "plugin": "SmartSpawners",
+      "namePatterns": ["smartspawners", "smart spawners"],
+      "loreKeywords": ["spawner stack:", "spawner amount:"]
+    },
+    {
+      "plugin": "WildStacker",
+      "namePatterns": ["wildstacker", "wild stacker"],
+      "loreKeywords": ["stacked:", "stack size:"]
+    },
+    {
+      "plugin": "SuperiorSkyblock",
+      "namePatterns": ["superiorskyblock", "superior skyblock", "island menu"],
+      "loreKeywords": ["island level:", "island members:", "island bank:", "click to visit"]
+    },
+    {
+      "plugin": "BentoBox",
+      "namePatterns": ["bentobox", "bento box", "bskyblock"],
+      "loreKeywords": ["island level:", "island settings:", "team members:"]
+    },
+    {
+      "plugin": "IridiumSkyblock",
+      "namePatterns": ["iridiumskyblock", "iridium skyblock"],
+      "loreKeywords": ["island value:", "island crystals:", "island rank:"]
+    },
+    {
+      "plugin": "FabledSkyblock",
+      "namePatterns": ["fabledskyblock", "fabled skyblock"],
+      "loreKeywords": ["island level:", "island size:"]
+    },
+    {
+      "plugin": "GriefPrevention",
+      "namePatterns": ["griefprevention", "grief prevention", "claim menu"],
+      "loreKeywords": ["claim blocks:", "trust list:", "claim settings"]
+    },
+    {
+      "plugin": "GriefDefender",
+      "namePatterns": ["griefdefender", "grief defender"],
+      "loreKeywords": ["claim blocks:", "claim type:", "claim flags:"]
+    },
+    {
+      "plugin": "Lands",
+      "namePatterns": ["lands", "land menu"],
+      "loreKeywords": ["land members:", "land balance:", "land chunks:", "land flags:"]
+    },
+    {
+      "plugin": "Towny",
+      "namePatterns": ["towny", "town menu", "nation menu"],
+      "loreKeywords": ["town bank:", "town residents:", "town plots:", "nation members:"]
+    },
+    {
+      "plugin": "PlotSquared",
+      "namePatterns": ["plotsquared", "plot squared", "plot menu"],
+      "loreKeywords": ["plot owner:", "plot members:", "plot flags:"]
+    },
+    {
+      "plugin": "Factions",
+      "namePatterns": ["factions", "faction menu"],
+      "loreKeywords": ["faction power:", "faction members:", "faction land:"]
+    },
+    {
+      "plugin": "VotingPlugin",
+      "namePatterns": ["votingplugin", "voting plugin", "vote menu"],
+      "loreKeywords": ["vote points:", "vote streak:", "click to vote"]
+    },
+    {
+      "plugin": "SuperbVote",
+      "namePatterns": ["superbvote", "superb vote"],
+      "loreKeywords": ["vote count:", "last vote:"]
+    },
+    {
+      "plugin": "DailyRewards",
+      "namePatterns": ["dailyrewards", "daily rewards", "daily reward"],
+      "loreKeywords": ["day streak:", "claim reward", "next reward:", "daily bonus"]
+    },
+    {
+      "plugin": "EssentialsX",
+      "namePatterns": ["essentialsx", "essentials"],
+      "loreKeywords": []
+    },
+    {
+      "plugin": "CMI",
+      "namePatterns": ["cmi"],
+      "loreKeywords": []
+    },
+    {
+      "plugin": "Citizens",
+      "namePatterns": ["citizens", "npc menu"],
+      "loreKeywords": ["npc id:", "npc type:"]
+    },
+    {
+      "plugin": "MythicMobs",
+      "namePatterns": ["mythicmobs", "mythic mobs"],
+      "loreKeywords": ["mob level:", "mob type:", "mythic drop"]
+    },
+    {
+      "plugin": "AdvancedEnchantments",
+      "namePatterns": ["advancedenchantments", "advanced enchantments", "enchant menu"],
+      "loreKeywords": ["success rate:", "destroy rate:", "apply to:", "enchant level:"]
+    },
+    {
+      "plugin": "ExcellentEnchants",
+      "namePatterns": ["excellentenchants", "excellent enchants"],
+      "loreKeywords": ["enchant chance:", "enchant trigger:"]
+    },
+    {
+      "plugin": "HeadDatabase",
+      "namePatterns": ["headdatabase", "head database", "heads menu"],
+      "loreKeywords": ["head id:", "category:", "click to get head"]
+    },
+    {
+      "plugin": "LuckPerms",
+      "namePatterns": ["luckperms", "luck perms", "permissions menu"],
+      "loreKeywords": ["permission:", "group:", "prefix:", "suffix:"]
+    },
+    {
+      "plugin": "DonutOrders",
+      "namePatterns": ["donutorders", "donut orders", "donut order"],
+      "loreKeywords": ["order status:", "order id:", "click to claim order"]
+    },
+    {
+      "plugin": "xOrders",
+      "namePatterns": ["xorders", "x orders"],
+      "loreKeywords": ["order status:", "order details:", "claim order"]
+    },
+    {
+      "plugin": "EternalOrders",
+      "namePatterns": ["eternalorders", "eternal orders"],
+      "loreKeywords": ["order status:", "order queue:", "click to collect"]
+    }
+  ]
+}

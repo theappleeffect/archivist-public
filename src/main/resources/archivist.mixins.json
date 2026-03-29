@@ -1,0 +1,18 @@
+{
+	"required": true,
+	"package": "com.archivist.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"client": [
+		"ClientPacketListenerMixin",
+		"ClientPacketListenerScreenMixin",
+		"ContainerScreenCaptureMixin",
+		"ClientCommonListenerMixin",
+		"ClientConfigurationListenerMixin",
+		"ConnectionProxyMixin",
+		"accessor.ClientCommonListenerAccessor",
+		"accessor.MinecraftUserAccessor"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}
