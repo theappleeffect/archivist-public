@@ -27,6 +27,8 @@ import com.archivist.gui.render.ThemeManager;
 import com.archivist.gui.panel.PanelModeLayout;
 import com.archivist.gui.panel.SplitPane;
 import com.archivist.gui.widgets.*;
+import com.archivist.util.ArchivistExecutor;
+import com.archivist.util.IpInfoLookup;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
@@ -188,6 +190,8 @@ public class ArchivistScreen extends Screen {
     private final EventBus eventBus;
     private final ArchivistConfig config;
     private final DetectionPipeline pipeline;
+    private final IpInfoLookup ipInfoLookup = new IpInfoLookup();
+    private volatile IpInfoLookup.IpInfoResult ipInfoResult;
 
     // Window state persistence
     private static Map<String, WindowStateManager.WindowState> savedWindowStates;
@@ -203,6 +207,15 @@ public class ArchivistScreen extends Screen {
         this.eventBus = eventBus;
         this.config = config;
         this.pipeline = pipeline;
+        triggerIpInfoLookup();
+    }
+
+    private void triggerIpInfoLookup() {
+        String address = session.getDomain();
+        if (address == null || address.equals("unknown") || address.isBlank()) return;
+        ArchivistExecutor.execute(() -> {
+            ipInfoResult = ipInfoLookup.lookup(address);
+        });
     }
 
     public void setParentScreen(Screen parent) { this.parent = parent; }
@@ -4050,6 +4063,23 @@ public class ArchivistScreen extends Screen {
         // Resource pack
         if (session != null && session.getResourcePack() != null) {
             cy = drawKVSingle(g, cs, m, cy, "Resource Pack", session.getResourcePack());
+        }
+        cy += 4;
+
+        // ── IP Info ──
+        cy = drawSectionHeader(g, cs, "IP Info", m, cy, contentW);
+        IpInfoLookup.IpInfoResult result = ipInfoResult;
+        if (result != null && result.isSuccess()) {
+            String[] lines = result.ipInfoJson().split("\n");
+            for (String line : lines) {
+                if (!line.trim().isEmpty()) {
+                    cy = drawKVSingle(g, cs, m, cy, null, line.trim());
+                }
+            }
+        } else if (result != null && result.error() != null) {
+            cy = drawKVSingle(g, cs, m, cy, "Status", result.error());
+        } else {
+            cy = drawKVSingle(g, cs, m, cy, "Status", "Looking up...");
         }
         cy += 4;
 

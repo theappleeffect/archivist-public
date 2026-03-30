@@ -323,6 +323,7 @@ public class ArchivistMod implements ClientModInitializer {
         commandRegistry.register(new HelpCommand(() -> commandRegistry));
         commandRegistry.register(new ClearCommand(() -> eventBus.reset()));
         commandRegistry.register(new InfoCommand(() -> session));
+        commandRegistry.register(new IpInfoCommand(() -> session));
         commandRegistry.register(new PluginsCommand(() -> session));
         commandRegistry.register(new ScanCommand(() -> pipeline, () -> session));
         commandRegistry.register(new ExportCommand(() -> session, () -> eventBus));
