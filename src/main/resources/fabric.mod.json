@@ -12,6 +12,9 @@
 	"entrypoints": {
 		"client": [
 			"com.archivist.ArchivistMod"
+		],
+		"meteor": [
+			"com.archivist.meteor.ArchivistMeteorAddon"
 		]
 	},
 	"mixins": [
@@ -25,5 +28,16 @@
 		"fabric-api": "*",
 		"minecraft": "${minecraft_dep}",
 		"java": ">=21"
+	},
+	"suggests": {
+		"meteor-client": "*"
+	},
+	"custom": {
+		"meteor-client:color": "89,78,255"
+	},
+	"modmenu": {
+		"parent": {
+			"id": "meteor-client"
+		}
 	}
 }
