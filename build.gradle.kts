@@ -2,6 +2,11 @@ plugins {
     id("fabric-loom")
 }
 
+repositories {
+    maven("https://maven.meteordev.org/releases")
+    maven("https://maven.meteordev.org/snapshots")
+}
+
 version = property("mod_version")!!
 group = property("maven_group")!!
 
@@ -21,11 +26,20 @@ loom {
     }
 }
 
+sourceSets {
+    main {
+        java.srcDir("src/main-meteor/java")
+    }
+}
+
 dependencies {
     minecraft("com.mojang:minecraft:${stonecutter.current.project}")
     mappings(loom.officialMojangMappings())
     modImplementation("net.fabricmc:fabric-loader:${property("deps.fabric_loader")}")
     modImplementation("net.fabricmc.fabric-api:fabric-api:${property("deps.fabric_api")}")
+
+    // Meteor Client (compiled but runtime-detected)
+    modImplementation("meteordevelopment:meteor-client:${property("deps.meteor")}")
 
     // Netty SOCKS proxy support (shaded into mod JAR)
     include(implementation("io.netty:netty-handler-proxy:4.1.97.Final")!!)

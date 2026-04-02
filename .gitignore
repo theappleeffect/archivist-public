@@ -3,9 +3,15 @@
 build/
 out/
 classes/
+caches/
+
+# gradle wrapper
+gradle/wrapper/gradle-wrapper.jar
 
 # eclipse
 *.launch
+.settings/
+bin/
 
 # idea
 .idea/
@@ -14,34 +20,64 @@ classes/
 *.iws
 
 # vscode
-.settings/
 .vscode/
-bin/
-.classpath
-.project
-
-# macos
-*.DS_Store
 
 # fabric
 run/
 
 # java
+*.class
+*.jar
+*.war
+*.ear
 hs_err_*.log
 replay_*.log
 *.hprof
 *.jfr
+*.log
+*.tmp
+*.bak
+*.orig
+
+# macos
+*.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# linux
+*~
+
+# windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 
 # claude
 .claude/
 
-# sensitive data
+# sensitive data (local config)
 accounts.json
 settings.json
 *.json.tmp
+proxy_config.json
+gui-config.json
+automation_config.json
+automation_state.json
+glossary.json
+.keystore
 
 # stonecutter versioned build output
 versions/*/build/
+versions/*/.gradle/
+versions/*/.idea/
+versions/*/run/
+versions/*/.classpath
+versions/*/.project
+.project
 
 # template
 template-mod-template-*/
+
+# minecraft logs
+logs/
