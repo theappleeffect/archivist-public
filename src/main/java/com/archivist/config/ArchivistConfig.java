@@ -6,19 +6,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/**
- * Unified configuration for the Archivist mod.
- */
 public final class ArchivistConfig {
 
-    // Core
     public boolean enabled = true;
     public String logFolder = "archivist/logs";
 
-    // Scraper
     public boolean autoHandleResourcePacks = true;
 
-    // GUI
     public boolean tutorial = true;
     public String activeTheme = "Aurora";
     public boolean gradientsEnabled = true;
@@ -28,24 +22,24 @@ public final class ArchivistConfig {
     public boolean guiAnimations = true;
     public boolean taskbarSlideAnimation = true;
     public boolean passiveGuiDetection = true;
-    public String taskbarPosition = "bottom"; // "bottom", "top", "left"
-    public String layoutMode = "dynamic"; // "windows" or "dynamic"
-    public String sidebarPosition = "left"; // "left" or "right" (dynamic mode only)
+    public String taskbarPosition = "bottom";
+    public String layoutMode = "dynamic";
+    public String sidebarPosition = "left";
     public java.util.List<String> sidebarOrder = new java.util.ArrayList<>();
 
-    // API
+    public List<String> excludedServers = new ArrayList<>();
+    public List<String> exceptionServers = new ArrayList<>();
+
+    public String selectedFont = "default";
+
     public List<ApiEndpointConfig> apiEndpoints = new ArrayList<>();
     public boolean autoUploadOnLog = false;
     public double autoPushMinConfidence = 0.4;
 
-    // Archivist-web integration
-    public String archivistWebApiKeyEncoded = "";   // Base64-encoded
+    public String archivistWebApiKeyEncoded = "";
     public boolean archivistWebEnabled = false;
-    public boolean archivistWebPromptShown = false;  // prevents repeat popup
+    public boolean archivistWebPromptShown = false;
 
-    /**
-     * Configuration for a single API endpoint.
-     */
     public static final class ApiEndpointConfig {
         public String id = UUID.randomUUID().toString();
         public String name = "";
@@ -56,9 +50,27 @@ public final class ArchivistConfig {
         public String resetEndpoint = "/api/reset";
         public Map<String, String> authHeadersEncoded = new HashMap<>();
         public String resetKeyEncoded = "";
-        public String adapterType = "REST"; // REST, DISCORD, MONGODB, POSTGRES, SQLITE, CUSTOM
+        public String adapterType = "REST";
         public boolean autoPush = false;
         public boolean enabled = true;
-        public String confirmedAt = null; // ISO timestamp of first opt-in confirmation
+        public String confirmedAt = null;
+    }
+
+    public boolean isExcluded(String address) {
+        if (address == null || address.isEmpty()) return false;
+        String lower = address.toLowerCase(java.util.Locale.ROOT);
+        for (String s : excludedServers) {
+            if (lower.equals(s.toLowerCase(java.util.Locale.ROOT))) return true;
+        }
+        return false;
+    }
+
+    public boolean isException(String address) {
+        if (address == null || address.isEmpty()) return false;
+        String lower = address.toLowerCase(java.util.Locale.ROOT);
+        for (String s : exceptionServers) {
+            if (lower.equals(s.toLowerCase(java.util.Locale.ROOT))) return true;
+        }
+        return false;
     }
 }

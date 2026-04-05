@@ -18,7 +18,11 @@ import java.util.regex.Pattern;
 public final class UrlExtractor {
 
     private static final Pattern URL_PATTERN = Pattern.compile(
-            "(?i)(?:https?://)?(?:www\\.)?([a-z0-9](?:[a-z0-9\\-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9\\-]{0,61}[a-z0-9])?)+)(?::\\d{1,5})?(?:/[\\w\\-./?%&=]*)?"
+            "(?i)(?<=[^a-zA-Z]|^)(?:https?://)?(?:www\\.)?([a-z0-9](?:[a-z0-9\\-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9\\-]{0,61}[a-z0-9])?)+)(?::\\d{1,5})?(?:/[\\w\\-./?%&=]*)?"
+    );
+
+    private static final Pattern METRIC_PATTERN = Pattern.compile(
+            "^\\d+\\.\\d+[a-z]{0,5}$", Pattern.CASE_INSENSITIVE
     );
 
     private static final Pattern IPV6_PATTERN = Pattern.compile(
@@ -45,13 +49,18 @@ public final class UrlExtractor {
             ".com", ".net", ".org", ".gg", ".io", ".co", ".xyz", ".me", ".cc", ".us"
     );
 
+    private static final Set<String> STORE_PREFIXES = Set.of(
+            "shop.", "buy.", "store.", "vote.", "wiki.", "map.", "status.", "forum.", "docs."
+    );
+
     private static final Set<String> WEB_KEYWORDS = Set.of(
             "discord.gg", "discord.com", "google", "youtube", "twitch", "twitter", "reddit",
             "azure", "amazonaws", "cloudflare"
     );
 
     private static final Set<String> BLACKLIST = Set.of(
-            "mojang.com", "minecraft.net", "microsoft.com", "localhost", "www.", "store."
+            "mojang.com", "minecraft.net", "microsoft.com", "localhost", "www.", "store.",
+            "dyno.gg", "carl.gg", "mee6.gg", "cord.gg"
     );
 
     private static final Set<String> HIGH_PRIORITY_DOMAINS = Set.of(
@@ -170,6 +179,10 @@ public final class UrlExtractor {
 
             if (isBlacklisted(domain)) continue;
             if (EMAIL_PATTERN.matcher(fullMatch).matches()) continue;
+            if (METRIC_PATTERN.matcher(domain).matches()) continue;
+            if (Character.isDigit(domain.charAt(0))) {
+                if (!IPV4_PATTERN.matcher(domain).matches()) continue;
+            }
 
             Matcher srvMatcher = SRV_PATTERN.matcher(domain);
             if (srvMatcher.matches()) {
@@ -190,6 +203,15 @@ public final class UrlExtractor {
                 } else {
                     versionStrings.add(domain);
                 }
+                continue;
+            }
+
+            boolean isStoreDomain = false;
+            for (String prefix : STORE_PREFIXES) {
+                if (domain.startsWith(prefix)) { isStoreDomain = true; break; }
+            }
+            if (isStoreDomain) {
+                detectedUrls.add(fullMatch);
                 continue;
             }
 

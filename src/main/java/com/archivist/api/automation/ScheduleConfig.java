@@ -58,7 +58,7 @@ public final class ScheduleConfig {
     public int lobbyTaskTimeoutMs = 15000;
 
     /** Time to wait after join before starting lobby tasks (ms). Fallback — event-driven check proceeds earlier. */
-    public int settleDelayMs = 4000;
+    public int settleDelayMs = 3000;
 
     // ── Kick/Disconnect Handling ──
 
@@ -80,6 +80,14 @@ public final class ScheduleConfig {
 
     /** Whether to use NPC fallback if hotbar/container methods fail. */
     public boolean npcFallbackEnabled = true;
+
+    // ── Active GUI Scanning ──
+
+    /** Whether to run active GUI scan commands during automation. */
+    public boolean activeGuiScanEnabled = false;
+
+    /** Commands to send for active GUI scanning (without leading slash). */
+    public java.util.List<String> activeGuiCommands = java.util.List.of("ah", "shop", "ec", "menu");
 
     private static Path getConfigPath() {
         return FabricLoader.getInstance().getGameDir()

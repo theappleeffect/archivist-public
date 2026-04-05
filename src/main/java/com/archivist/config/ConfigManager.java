@@ -11,9 +11,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/**
- * Loads and saves {@link ArchivistConfig} from disk as JSON.
- */
 public final class ConfigManager {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("archivist");
@@ -21,20 +18,13 @@ public final class ConfigManager {
 
     private ConfigManager() {}
 
-    /**
-     * Returns the path to the config file.
-     */
     public static Path getConfigPath() {
         return FabricLoader.getInstance().getGameDir().resolve("archivist").resolve("settings.json");
     }
 
-    /**
-     * Loads the config from disk. Creates a default config file if none exists.
-     */
     public static synchronized ArchivistConfig load() {
         Path path = getConfigPath();
 
-        // Migrate from old name (config.json → settings.json)
         if (!Files.exists(path)) {
             Path prevPath = path.resolveSibling("config.json");
             if (Files.exists(prevPath)) {
@@ -47,7 +37,6 @@ public final class ConfigManager {
             }
         }
 
-        // Migrate from legacy location (config/archivist.json → archivist/settings.json)
         if (!Files.exists(path)) {
             Path oldPath = FabricLoader.getInstance().getConfigDir().resolve("archivist.json");
             if (Files.exists(oldPath)) {
@@ -72,11 +61,12 @@ public final class ConfigManager {
             if (config == null) {
                 return new ArchivistConfig();
             }
-            // Guard against partial deserialization leaving collection fields null
             if (config.apiEndpoints == null) config.apiEndpoints = new java.util.ArrayList<>();
             for (ArchivistConfig.ApiEndpointConfig ep : config.apiEndpoints) {
                 if (ep.authHeadersEncoded == null) ep.authHeadersEncoded = new java.util.HashMap<>();
             }
+            if (config.excludedServers == null) config.excludedServers = new java.util.ArrayList<>();
+            if (config.exceptionServers == null) config.exceptionServers = new java.util.ArrayList<>();
             return config;
         } catch (IOException e) {
             LOGGER.error("Failed to load config, using defaults", e);
@@ -84,9 +74,6 @@ public final class ConfigManager {
         }
     }
 
-    /**
-     * Saves the config to disk as formatted JSON.
-     */
     public static synchronized void save(ArchivistConfig config) {
         Path path = getConfigPath();
         try {

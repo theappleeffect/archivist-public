@@ -12,7 +12,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(ClientConfigurationPacketListenerImpl.class)
 public class ClientConfigurationListenerMixin {
 
-    @Inject(method = "handleRegistryData", at = @At("HEAD"))
+    @Inject(method = "handleRegistryData", at = @At("TAIL"))
     private void archivist$onRegistryData(ClientboundRegistryDataPacket packet, CallbackInfo ci) {
         MixinBridge.State snap = MixinBridge.snapshot();
         DetectionPipeline p = snap.pipeline();

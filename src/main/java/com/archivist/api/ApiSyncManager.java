@@ -114,20 +114,17 @@ public final class ApiSyncManager {
             return;
         }
 
-        boolean anyAutoPush = config.autoUploadOnLog;
-        if (!anyAutoPush) {
-            for (ApiEndpointConfig ep : config.apiEndpoints) {
-                if (ep.enabled && ep.autoPush && isEndpointConfigured(ep)) {
+        List<ApiEndpointConfig> endpoints = getEnabledEndpoints(config);
+        boolean anyAutoPush = false;
+        if (config.autoUploadOnLog && !endpoints.isEmpty()) {
+            anyAutoPush = true;
+        } else {
+            for (ApiEndpointConfig ep : endpoints) {
+                if (ep.autoPush) {
                     anyAutoPush = true;
                     break;
                 }
             }
-        }
-        // Archivist-web always auto-pushes when enabled
-        if (!anyAutoPush && config.archivistWebEnabled
-                && config.archivistWebApiKeyEncoded != null
-                && !config.archivistWebApiKeyEncoded.isEmpty()) {
-            anyAutoPush = true;
         }
 
         if (anyAutoPush) {
@@ -591,18 +588,19 @@ public final class ApiSyncManager {
             ServerLogData queued = offlineQueue.poll();
             if (queued == null) break;
 
-            boolean ok = false;
+            boolean anySuccess = false;
             for (ApiEndpointConfig ep : endpoints) {
                 try {
-                    ApiResponse resp = pushToEndpoint(ep, queued);
-                    if (resp.success()) {
-                        ok = true;
+                    ApiResponse response = pushToEndpoint(ep, queued);
+                    if (response.success()) {
+                        anySuccess = true;
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+                    LOGGER.warn("[Archivist] Offline queue push to {} failed: {}", ep.name, e.getMessage());
+                }
             }
 
-            if (!ok) {
-                // Put it back and stop retrying
+            if (!anySuccess) {
                 offlineQueue.add(queued);
                 break;
             }

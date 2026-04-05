@@ -91,6 +91,7 @@ public class ArchivistMod implements ClientModInitializer {
     public RuleCaptureManager getRuleCaptureManager() { return ruleCaptureManager; }
     public AccountManager getAccountManager() { return accountManager; }
     public ProxyManager getProxyManager() { return proxyManager; }
+    public PluginGlossary getGlossary() { return glossary; }
     public com.archivist.api.automation.SequenceHandler getSequenceHandler() { return automationOrchestrator; }
     public com.archivist.api.automation.ScheduleConfig getScheduleConfig() { return automationConfig; }
 
@@ -108,6 +109,7 @@ public class ArchivistMod implements ClientModInitializer {
         session = new ServerSession(eventBus);
 
         glossary = new PluginGlossary();
+        session.setGlossary(glossary);
         glossary.load();
 
         pipeline = new DetectionPipeline(glossary);
@@ -123,8 +125,8 @@ public class ArchivistMod implements ClientModInitializer {
                 automationConfig, automationState);
         scanOverlay = new ScanProgressOverlay(config, pipeline);
         scanOverlay.setOrchestrator(automationOrchestrator);
+        scanOverlay.setDomainSupplier(() -> session != null ? session.getDomain() : "unknown");
 
-        // Heuristics
         pluginHeuristics = new PluginHeuristics();
         pluginHeuristics.load();
 
@@ -204,8 +206,14 @@ public class ArchivistMod implements ClientModInitializer {
         });
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
-            apiSyncManager.onDisconnect(session.toLogData(), pipeline.getSessionConfidence().getConfidence());
-            JsonLogger.writeLog(session.toLogData());
+            String serverAddr = session != null ? session.getDomain() : null;
+            String serverIp = session != null ? session.getIp() : null;
+            boolean excluded = config.isExcluded(serverAddr) || config.isExcluded(serverIp);
+
+            if (!excluded) {
+                apiSyncManager.onDisconnect(session.toLogData(), pipeline.getSessionConfidence().getConfidence());
+                JsonLogger.writeLog(session.toLogData());
+            }
             eventBus.post(new LogEvent(LogEvent.Type.DISCONNECT, "Disconnected"));
             pipeline.reset();
             scanOverlay.reset();
@@ -365,23 +373,45 @@ public class ArchivistMod implements ClientModInitializer {
         try {
             var connection = handler.getConnection();
             var remoteAddr = connection.getRemoteAddress();
+            String resolvedIp = null;
             if (remoteAddr instanceof java.net.InetSocketAddress inet) {
-                session.setIp(inet.getAddress().getHostAddress());
+                resolvedIp = inet.getAddress().getHostAddress();
+                session.setIp(resolvedIp);
                 session.setPort(inet.getPort());
             }
             var serverData = client.getCurrentServer();
             if (serverData != null) {
                 String typedAddr = serverData.ip;
+                String domain = null;
                 if (!typedAddr.isEmpty()) {
                     int lastColon = typedAddr.lastIndexOf(':');
                     if (lastColon > 0) {
-                        session.setDomain(typedAddr.substring(0, lastColon));
+                        domain = typedAddr.substring(0, lastColon);
                         try { session.setPort(Integer.parseInt(typedAddr.substring(lastColon + 1))); }
-                        catch (NumberFormatException ignored) {}
+                        catch (NumberFormatException ignored) { session.setPort(25565); }
                     } else {
-                        session.setDomain(typedAddr);
+                        domain = typedAddr;
+                        session.setPort(25565);
                     }
                 }
+
+                boolean exception = config.isException(domain);
+                if (exception) {
+                    session.setIp("unknown");
+                    session.setDomain("unknown");
+                    pipeline.setChatUrlExtractionEnabled(false);
+                } else {
+                    if (domain != null) {
+                        session.setDomain(domain);
+                        try {
+                            String dnsIp = java.net.InetAddress.getByName(domain).getHostAddress();
+                            if (dnsIp != null) {
+                                session.setIp(dnsIp);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+
                 if (serverData.players != null) {
                     int count = serverData.players.online();
                     int max = serverData.players.max();
@@ -391,7 +421,6 @@ public class ArchivistMod implements ClientModInitializer {
                     int tabListCount = handler.getOnlinePlayers().size();
                     pipeline.onPlayerCount(count, tabListCount);
                 }
-                // Server version from SLP (Server List Ping) response
                 if (serverData.version != null) {
                     String ver = serverData.version.getString();
                     if (ver.length() > 20) ver = ver.substring(0, 20);

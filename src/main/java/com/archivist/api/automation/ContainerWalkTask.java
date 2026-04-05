@@ -54,6 +54,8 @@ public class ContainerWalkTask implements TickTask {
     private boolean complete = false;
     private boolean failed = false;
     private int targetSlot = -1;
+    private final List<Integer> candidateSlots = new ArrayList<>();
+    private int candidateIndex = 0;
 
     public ContainerWalkTask() {}
 
@@ -67,6 +69,8 @@ public class ContainerWalkTask implements TickTask {
         ticksInPhase = 0;
         failed = false;
         targetSlot = -1;
+        candidateSlots.clear();
+        candidateIndex = 0;
     }
 
     @Override
@@ -87,7 +91,6 @@ public class ContainerWalkTask implements TickTask {
                 }
             }
             case SCANNING -> {
-                // Give the GUI a moment to populate
                 if (ticksInPhase < 5) return;
 
                 if (!(mc.screen instanceof AbstractContainerScreen<?> screen)) {
@@ -104,9 +107,7 @@ public class ContainerWalkTask implements TickTask {
                     return;
                 }
 
-                int bestSlot = -1;
-                int bestPlayerCount = -1;
-                int firstKeywordSlot = -1;
+                List<int[]> scored = new ArrayList<>();
 
                 for (Slot slot : menu.slots) {
                     ItemStack stack = slot.getItem();
@@ -116,33 +117,27 @@ public class ContainerWalkTask implements TickTask {
                     List<String> lore = getLore(stack);
                     String combined = name + " " + String.join(" ", lore);
 
-                    // Skip blacklisted items
                     if (CLICK_BLACKLIST.stream().anyMatch(combined::contains)) continue;
 
-                    // Check for game mode keyword match
                     boolean hasKeyword = GAMEMODE_KEYWORDS.stream().anyMatch(combined::contains);
                     if (!hasKeyword) continue;
 
-                    // Extract player count
                     int playerCount = extractPlayerCount(combined);
-                    if (playerCount >= 22 && playerCount > bestPlayerCount) {
-                        bestSlot = slot.index;
-                        bestPlayerCount = playerCount;
-                    }
-
-                    if (firstKeywordSlot == -1) {
-                        firstKeywordSlot = slot.index;
-                    }
+                    scored.add(new int[]{slot.index, playerCount});
                 }
 
-                // Priority: highest player count, else first keyword match
-                targetSlot = bestSlot >= 0 ? bestSlot : firstKeywordSlot;
+                scored.sort((a, b) -> Integer.compare(b[1], a[1]));
+                candidateSlots.clear();
+                for (int[] entry : scored) {
+                    candidateSlots.add(entry[0]);
+                }
+                candidateIndex = 0;
 
-                if (targetSlot >= 0) {
+                if (!candidateSlots.isEmpty()) {
+                    targetSlot = candidateSlots.get(0);
                     phase = Phase.CLICKING;
                     ticksInPhase = 0;
                 } else {
-                    // Nothing matched — close and fail
                     phase = Phase.CLOSING;
                     ticksInPhase = 0;
                     failed = true;
@@ -167,16 +162,21 @@ public class ContainerWalkTask implements TickTask {
                 ticksInPhase = 0;
             }
             case WAIT_TRANSFER -> {
-                // Wait for server transfer or GUI to close
                 if (mc.screen == null || !(mc.screen instanceof AbstractContainerScreen<?>)) {
-                    // GUI closed — likely transferred or item consumed
                     complete = true;
                     return;
                 }
-                if (ticksInPhase >= TRANSFER_WAIT_TICKS) {
-                    // Timed out waiting — close and finish
-                    phase = Phase.CLOSING;
-                    ticksInPhase = 0;
+                if (ticksInPhase >= 60) {
+                    candidateIndex++;
+                    if (candidateIndex < candidateSlots.size()) {
+                        targetSlot = candidateSlots.get(candidateIndex);
+                        phase = Phase.CLICKING;
+                        ticksInPhase = 0;
+                    } else {
+                        phase = Phase.CLOSING;
+                        ticksInPhase = 0;
+                        failed = true;
+                    }
                 }
             }
             case CLOSING -> {

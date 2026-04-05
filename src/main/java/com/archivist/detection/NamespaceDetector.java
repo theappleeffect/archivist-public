@@ -5,10 +5,6 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Detects plugins from namespace strings (plugin channels and registry data).
- * Replaces the separate ChannelDetector and RegistryDetector.
- */
 public final class NamespaceDetector {
 
     private final PluginGlossary glossary;
@@ -20,29 +16,30 @@ public final class NamespaceDetector {
         this.glossary = glossary;
     }
 
-    /**
-     * Feed a namespace from any source (channel, registry, etc).
-     * If immediateMode is on, resolves right away; otherwise queues.
-     */
     public synchronized void onNamespace(String namespace) {
         if (namespace == null || namespace.isEmpty()) return;
         String lower = namespace.toLowerCase(Locale.ROOT);
         if (DetectionConstants.IGNORED_NAMESPACES.contains(lower)) return;
+        if (DetectionConstants.CLIENT_MOD_NAMESPACES.contains(lower)) return;
 
         if (immediateMode) {
-            detected.add(glossary.resolve(lower).orElse(lower));
+            String name = glossary.resolve(lower).or(() -> glossary.resolveFuzzy(lower)).orElse(lower);
+            if (name.equals(lower) && !glossary.contains(lower)) {
+                glossary.trackUnresolved(lower);
+            }
+            detected.add(name);
         } else {
             pending.add(lower);
         }
     }
 
-    /**
-     * Resolve all queued namespaces through the glossary.
-     */
     public Set<String> processPending() {
         Set<String> resolved = new LinkedHashSet<>();
         for (String ns : pending) {
-            String name = glossary.resolve(ns).orElse(ns);
+            String name = glossary.resolve(ns).or(() -> glossary.resolveFuzzy(ns)).orElse(ns);
+            if (name.equals(ns) && !glossary.contains(ns)) {
+                glossary.trackUnresolved(ns);
+            }
             resolved.add(name);
             detected.add(name);
         }

@@ -6,6 +6,7 @@ import com.archivist.data.EventBus;
 import com.archivist.data.JsonLogger;
 import com.archivist.data.LogEvent;
 import com.archivist.detection.DetectionPipeline;
+import com.archivist.detection.SessionConfidence;
 import com.archivist.data.ServerSession;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
@@ -23,17 +24,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.function.Supplier;
 
-/**
- * High-level orchestrator that drives the full multi-server automation loop:
- * connect -> scan (optionally run lobby tasks) -> disconnect -> delay -> next.
- *
- * <p>Simplified phases: IDLE -> CONNECTING -> SCANNING -> DISCONNECTING -> DELAY -> (next or COMPLETED)
- *
- * <p>This is a tick-driven state machine operating above {@link TaskRunner}.
- * Called every client tick from {@code ArchivistMod}.</p>
- */
 public final class SequenceHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("archivist");
@@ -52,7 +46,6 @@ public final class SequenceHandler {
 
     public record AutomationLogEntry(long timestampMs, String message, LogLevel level) {}
 
-    // Dependencies
     private final TaskRunner engine;
     private final EventBus eventBus;
     private final Supplier<DetectionPipeline> pipelineSupplier;
@@ -60,7 +53,6 @@ public final class SequenceHandler {
     private final ScheduleConfig config;
     private final SequenceState state;
 
-    // Runtime state
     private Phase phase = Phase.IDLE;
     private int ticksInPhase = 0;
     private List<String> currentServerList = Collections.emptyList();
@@ -68,25 +60,41 @@ public final class SequenceHandler {
     private volatile boolean disconnectEventReceived = false;
     private int delayTicks = 0;
 
-    // Retry & failure tracking
     private int currentServerRetries = 0;
     private int consecutiveFailures = 0;
     private boolean retryingSameServer = false;
 
-    // Post-disconnect action
     private Runnable pendingPostDisconnect = null;
 
-    // Lobby task stepped state machine
-    private enum LobbyStep { NONE, HOTBAR_SCAN, GUI_SCAN, NPC_FALLBACK, NPC_GUI_SCAN, DONE }
+    private enum LobbyStep { NONE, HOTBAR_SCAN, GUI_SCAN, NPC_ITERATION, DONE, ACTIVE_GUI_SCAN }
     private LobbyStep lobbyStep = LobbyStep.NONE;
     private SlotScanTask activeSlotScan;
     private ContainerWalkTask activeContainerWalk;
-    private int lobbyDoneAtTick = -1; // tick when lobby tasks finished navigating
+    private int lobbyDoneAtTick = -1;
 
-    // Saved settings (restored when automation stops)
+    private int transferDetectedAtTick = -1;
+    private static final int DWELL_TICKS = 45;
+
+    private EntityInspectTask activeNpcTask;
+    private ContainerWalkTask npcContainerWalk;
+    private enum NpcSubStep { INSPECT, GUI_SCAN }
+    private NpcSubStep npcSubStep = NpcSubStep.INSPECT;
+    private static final int MAX_NPC_ATTEMPTS = 5;
+    private int npcAttemptCount = 0;
+
     private boolean savedPassiveGuiDetection;
+    private ActiveGuiScanTask activeGuiScan;
+    private boolean guiScanCompleted = false;
+    private boolean versionProbeSent = false;
 
-    // Log for the GUI
+    private static final Set<String> AUTH_CAPTCHA_KEYWORDS = Set.of(
+            "captcha", "solve captcha",
+            "/login", "/register", "/l ", "/reg ",
+            "/auth", "/premium", "/changepassword",
+            "login to play", "register to play",
+            "log in", "sign in", "sign up"
+    );
+
     private final List<AutomationLogEntry> log = new ArrayList<>();
 
     public SequenceHandler(TaskRunner engine, EventBus eventBus,
@@ -101,8 +109,6 @@ public final class SequenceHandler {
         this.state = state;
     }
 
-    // -- Control methods (called from GUI) --
-
     public void start() {
         if (config.activeServerList.isEmpty()) {
             addLog("No server list selected", LogLevel.ERROR);
@@ -114,15 +120,17 @@ public final class SequenceHandler {
             return;
         }
 
-        // Shuffle for stealth if enabled
         if (config.shuffleServerList) {
             currentServerList = new ArrayList<>(currentServerList);
             Collections.shuffle(currentServerList);
             addLog("Server list shuffled", LogLevel.INFO);
         }
 
-        // Save and disable interfering settings
         saveAndDisableSettings();
+
+        state.currentIndex = 0;
+        state.completedServers.clear();
+        state.failedServers.clear();
 
         state.activeListName = config.activeServerList;
         state.status = SequenceState.RunStatus.RUNNING;
@@ -156,7 +164,6 @@ public final class SequenceHandler {
             state.save();
             if (!config.activeServerList.isEmpty()) {
                 currentServerList = AddressListManager.loadList(config.activeServerList);
-                // Don't reshuffle on resume -- currentIndex would point to wrong server
             }
             addLog("Resumed", LogLevel.INFO);
             postEvent("Automation resumed");
@@ -165,6 +172,10 @@ public final class SequenceHandler {
 
     public void stop() {
         engine.clearTasks();
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.getConnection() != null) {
+            mc.execute(() -> mc.disconnect(new TitleScreen(), false));
+        }
         state.status = SequenceState.RunStatus.IDLE;
         state.stoppedAtEpochMs = System.currentTimeMillis();
         state.save();
@@ -174,7 +185,6 @@ public final class SequenceHandler {
         postEvent("Automation stopped");
     }
 
-    /** Skip the current server and advance to the next one. */
     public void skipCurrent() {
         if (phase == Phase.IDLE || phase == Phase.COMPLETED) return;
         engine.clearTasks();
@@ -183,7 +193,6 @@ public final class SequenceHandler {
         currentServerRetries = 0;
         retryingSameServer = false;
 
-        // Disconnect if connected
         Minecraft mc = Minecraft.getInstance();
         if (mc.getConnection() != null) {
             setPhase(Phase.DISCONNECTING);
@@ -193,8 +202,6 @@ public final class SequenceHandler {
         }
     }
 
-    // -- Lifecycle callbacks (called from ArchivistMod event handlers) --
-
     public void onServerJoined() {
         joinEventReceived = true;
     }
@@ -203,40 +210,49 @@ public final class SequenceHandler {
         disconnectEventReceived = true;
     }
 
-    // -- Main tick --
-
     public void tick() {
         if (phase == Phase.IDLE || phase == Phase.COMPLETED) return;
         if (state.status == SequenceState.RunStatus.PAUSED) return;
 
         Minecraft mc = Minecraft.getInstance();
 
-        // UNIVERSAL: Always dismiss DisconnectedScreen during automation.
-        // Use mc.disconnect(new TitleScreen(), false) for clean state reset instead of setting JoinMultiplayerScreen.
         if (mc.screen instanceof DisconnectedScreen) {
             String reason = extractDisconnectReason(mc);
             mc.execute(() -> mc.disconnect(new TitleScreen(), false));
 
             if (phase == Phase.CONNECTING) {
-                // Login kick — silent skip, no delay, no failure counter
                 addLog("Login rejected: " + reason, LogLevel.WARN);
+                String reasonLower = reason.toLowerCase(java.util.Locale.ROOT);
+                boolean shouldSkip = reasonLower.contains("vpn") || reasonLower.contains("proxy")
+                        || reasonLower.contains("suspicious") || reasonLower.contains("blocked")
+                        || reasonLower.contains("blacklist") || reasonLower.contains("banned")
+                        || reasonLower.contains("unusual activity") || reasonLower.contains("already connected")
+                        || reasonLower.contains("ratelimit") || reasonLower.contains("rate limit")
+                        || reasonLower.contains("malicious") || reasonLower.contains("flagged");
+                if (shouldSkip) {
+                    addLog("Auto-skipping: " + reason.substring(0, Math.min(reason.length(), 60)), LogLevel.WARN);
+                }
                 state.markFailed(state.currentServer, reason);
-                advanceToNextServer();
+                setPhase(Phase.DELAY);
                 return;
             }
 
-            // If we're in an active phase (not already handling disconnect/delay), treat as kick
             if (phase != Phase.DELAY && phase != Phase.DISCONNECTING) {
                 engine.clearTasks();
                 addLog("Kicked: " + reason, LogLevel.ERROR);
-                if ("retry".equals(config.onKickAction)) {
-                    handleServerFailure(reason);
-                } else {
+                String reasonLower = reason.toLowerCase(java.util.Locale.ROOT);
+                boolean vpnOrSuspicious = reasonLower.contains("vpn") || reasonLower.contains("proxy")
+                        || reasonLower.contains("suspicious") || reasonLower.contains("blocked")
+                        || reasonLower.contains("blacklist") || reasonLower.contains("banned")
+                        || reasonLower.contains("unusual activity") || reasonLower.contains("already connected");
+                if (vpnOrSuspicious || !"retry".equals(config.onKickAction)) {
+                    if (vpnOrSuspicious) addLog("VPN/suspicious kick detected, skipping server", LogLevel.WARN);
                     handleServerFailureNoRetry(reason);
+                } else {
+                    handleServerFailure(reason);
                 }
                 return;
             }
-            // If in DELAY or DISCONNECTING, screen is just dismissed, continue normally
         }
 
         ticksInPhase++;
@@ -258,20 +274,25 @@ public final class SequenceHandler {
             activeSlotScan = null;
             activeContainerWalk = null;
             lobbyDoneAtTick = -1;
+            transferDetectedAtTick = -1;
+            activeNpcTask = null;
+            npcContainerWalk = null;
+            npcSubStep = NpcSubStep.INSPECT;
+            npcAttemptCount = 0;
+            activeGuiScan = null;
+            guiScanCompleted = false;
+            versionProbeSent = false;
             addLog("Connected to " + state.currentServer, LogLevel.SUCCESS);
             setPhase(Phase.SCANNING);
             return;
         }
 
-        // Timeout — treat like login kick: silent skip, no failure counter, immediate advance
         int timeoutTicks = JitteredTimer.msToTicks(config.connectionTimeoutMs);
         if (ticksInPhase >= timeoutTicks) {
             addLog("Connection timed out: " + state.currentServer, LogLevel.WARN);
-            // Force disconnect if partially connected
             if (mc.getConnection() != null) {
                 mc.execute(() -> mc.disconnect(new TitleScreen(), false));
             }
-            // Dismiss any lingering screen
             if (mc.screen instanceof ConnectScreen || mc.screen instanceof DisconnectedScreen) {
                 mc.execute(() -> mc.disconnect(new TitleScreen(), false));
             }
@@ -280,23 +301,21 @@ public final class SequenceHandler {
         }
     }
 
-    /**
-     * Unified scanning phase. The settle delay is the first N ticks.
-     * After settle, lobby tasks run in conditional steps:
-     *   1. Hotbar scan → if GUI opens → scan GUI for game-mode items
-     *   2. If no hotbar items → NPC walk → if GUI opens → scan GUI
-     *   3. Wait for detection pipeline to complete
-     */
     private void tickScanning(Minecraft mc) {
         DetectionPipeline pipeline = pipelineSupplier.get();
         int settleTicks = JitteredTimer.msToTicks(config.settleDelayMs);
 
-        // Wait the full settle delay so all signals (inventory, scoreboard, etc.) have time to fire
         if (lobbyStep == LobbyStep.NONE && ticksInPhase < settleTicks) {
-            return;
+            SessionConfidence sc = pipeline.getSessionConfidence();
+            if (sc.isForceLobby() && !sc.isForceReal()) {
+                addLog("Lobby item detected early, skipping settle delay", LogLevel.INFO);
+            } else if (pipeline.isScanComplete() && sc.isInventoryChecked() && ticksInPhase >= 20) {
+                addLog("Scan and inventory ready at tick " + ticksInPhase + ", proceeding early", LogLevel.INFO);
+            } else {
+                return;
+            }
         }
 
-        // After settle: check confidence (same check the scan overlay toast uses)
         if (lobbyStep == LobbyStep.NONE) {
             double confidence = pipeline.getSessionConfidence().getConfidence();
             boolean lobbyDetected = confidence < config.lobbyThreshold;
@@ -317,12 +336,10 @@ public final class SequenceHandler {
             }
         }
 
-        // Advance lobby steps when engine finishes each task
         if (lobbyStep != LobbyStep.DONE && engine.getState() != TaskRunner.State.RUNNING) {
             advanceLobbyStep(mc);
         }
 
-        // Check if lobby tasks timed out
         if (lobbyStep != LobbyStep.DONE && engine.getState() == TaskRunner.State.RUNNING) {
             int lobbyTimeout = JitteredTimer.msToTicks(config.lobbyTaskTimeoutMs);
             if (ticksInPhase - settleTicks >= lobbyTimeout) {
@@ -332,26 +349,52 @@ public final class SequenceHandler {
             }
         }
 
-        // Only finish scan after lobby tasks are done — the pipeline may report
-        // "scan complete" while we're still in the lobby navigating menus/NPCs.
         if (lobbyStep == LobbyStep.DONE) {
-            // Event-driven post-navigate: wait for transfer confirmation or fallback timeout.
-            // Do NOT use pipeline.isScanComplete() here — it may be stale from the lobby scan.
             if (lobbyDoneAtTick > 0) {
                 double postConf = pipeline.getSessionConfidence().getConfidence();
                 boolean transferred = postConf >= config.lobbyThreshold;
                 int fallbackTicks = JitteredTimer.msToTicks(config.settleDelayMs);
                 boolean fallbackExpired = ticksInPhase >= lobbyDoneAtTick + fallbackTicks;
 
-                if (!transferred && !fallbackExpired) return;
+                if (transferred && transferDetectedAtTick < 0) {
+                    transferDetectedAtTick = ticksInPhase;
+                    addLog("Transfer detected, dwelling for 3s", LogLevel.INFO);
+                }
+
+                if (transferDetectedAtTick > 0) {
+                    if (ticksInPhase < transferDetectedAtTick + DWELL_TICKS) return;
+                } else if (!fallbackExpired) {
+                    return;
+                }
+            }
+
+            if (pipeline.isScanComplete() && !guiScanCompleted && config.activeGuiScanEnabled
+                    && !config.activeGuiCommands.isEmpty()
+                    && pipeline.getSessionConfidence().getConfidence() >= config.lobbyThreshold) {
+                addLog("Starting active GUI scan (" + config.activeGuiCommands.size() + " commands)", LogLevel.INFO);
+                activeGuiScan = new ActiveGuiScanTask(config.activeGuiCommands);
+                engine.clearTasks();
+                engine.addTask(activeGuiScan);
+                engine.start();
+                guiScanCompleted = true;
+                lobbyStep = LobbyStep.ACTIVE_GUI_SCAN;
+                return;
             }
 
             if (pipeline.isScanComplete()) {
+                if (!versionProbeSent) {
+                    String versionCmd = pipeline.getVersionCommand();
+                    if (versionCmd != null && mc.getConnection() != null) {
+                        addLog("Sending version probe: /" + versionCmd, LogLevel.INFO);
+                        pipeline.startVersionProbe();
+                        mc.getConnection().sendCommand(versionCmd);
+                    }
+                    versionProbeSent = true;
+                }
                 finishScan(pipeline);
                 return;
             }
 
-            // Overall detection timeout
             int timeoutTicks = JitteredTimer.msToTicks(config.detectionTimeoutMs);
             if (ticksInPhase >= timeoutTicks) {
                 addLog("Detection timed out, saving what we have", LogLevel.WARN);
@@ -359,49 +402,78 @@ public final class SequenceHandler {
                 finishScan(pipeline);
             }
         }
+
+        if (lobbyStep == LobbyStep.ACTIVE_GUI_SCAN && engine.getState() != TaskRunner.State.RUNNING) {
+            addLog("Active GUI scan complete", LogLevel.INFO);
+            lobbyStep = LobbyStep.DONE;
+            guiScanCompleted = true;
+        }
     }
 
-    /**
-     * Advance the lobby task state machine after the current task finishes.
-     */
+    private boolean detectAuthChatMessages() {
+        DetectionPipeline pipeline = pipelineSupplier.get();
+        if (pipeline == null) return false;
+        for (String msg : pipeline.getChatMessageBuffer()) {
+            String lower = msg.toLowerCase(Locale.ROOT);
+            for (String keyword : AUTH_CAPTCHA_KEYWORDS) {
+                if (lower.contains(keyword)) return true;
+            }
+        }
+        return false;
+    }
+
     private void advanceLobbyStep(Minecraft mc) {
         switch (lobbyStep) {
             case HOTBAR_SCAN -> {
                 if (mc.screen instanceof AbstractContainerScreen<?>) {
-                    // GUI opened from hotbar item — scan it for game-mode items
                     addLog("GUI opened, scanning for game-mode items", LogLevel.INFO);
                     activeContainerWalk = new ContainerWalkTask();
                     engine.clearTasks();
                     engine.addTask(activeContainerWalk);
                     engine.start();
                     lobbyStep = LobbyStep.GUI_SCAN;
-                } else if (activeSlotScan != null && !activeSlotScan.hasFoundItems() && config.npcFallbackEnabled) {
-                    // No hotbar items found — fall back to NPC interaction
-                    addLog("No selector items in hotbar, trying NPC interaction", LogLevel.INFO);
-                    engine.clearTasks();
-                    engine.addTask(new EntityInspectTask());
-                    engine.start();
-                    lobbyStep = LobbyStep.NPC_FALLBACK;
                 } else if (activeSlotScan != null && !activeSlotScan.hasFoundItems()) {
-                    // No hotbar items and NPC fallback disabled
-                    addLog("No selector items in hotbar, NPC fallback disabled", LogLevel.INFO);
-                    lobbyStep = LobbyStep.DONE;
+                    if (detectAuthChatMessages()) {
+                        addLog("Auth/captcha server detected, skipping", LogLevel.WARN);
+                        proceedToDisconnectThen(() -> handleServerFailureNoRetry("auth/captcha required"));
+                        return;
+                    }
+                    if (config.npcFallbackEnabled) {
+                        addLog("No selector items in hotbar, trying NPC iteration", LogLevel.INFO);
+                        startNpcIteration();
+                    } else {
+                        addLog("No selector items in hotbar, NPC fallback disabled", LogLevel.INFO);
+                        lobbyStep = LobbyStep.DONE;
+                    }
                 } else {
-                    // Items existed but no GUI opened — nothing more to try
-                    addLog("Hotbar items found but no GUI opened", LogLevel.WARN);
-                    lobbyStep = LobbyStep.DONE;
+                    if (config.npcFallbackEnabled) {
+                        addLog("Hotbar items found but no GUI opened, trying NPC iteration", LogLevel.WARN);
+                        startNpcIteration();
+                    } else {
+                        addLog("Hotbar items found but no GUI opened", LogLevel.WARN);
+                        lobbyStep = LobbyStep.DONE;
+                    }
                 }
             }
             case GUI_SCAN -> {
                 if (activeContainerWalk != null && activeContainerWalk.hasFailed()
                         && activeSlotScan != null && activeSlotScan.hasMoreCandidates()) {
-                    // GUI had no game-mode match — close and try next hotbar item
                     addLog("No game-mode match in GUI, trying next item", LogLevel.INFO);
                     if (activeSlotScan.resumeFromFailedGui()) {
                         engine.clearTasks();
                         engine.addTask(activeSlotScan);
                         engine.start();
                         lobbyStep = LobbyStep.HOTBAR_SCAN;
+                    } else if (config.npcFallbackEnabled) {
+                        addLog("All hotbar items exhausted, trying NPC iteration", LogLevel.INFO);
+                        startNpcIteration();
+                    } else {
+                        lobbyStep = LobbyStep.DONE;
+                    }
+                } else if (activeContainerWalk != null && activeContainerWalk.hasFailed()) {
+                    if (config.npcFallbackEnabled) {
+                        addLog("No game-mode match in GUI, trying NPC iteration", LogLevel.INFO);
+                        startNpcIteration();
                     } else {
                         lobbyStep = LobbyStep.DONE;
                     }
@@ -411,34 +483,77 @@ public final class SequenceHandler {
                     lobbyStep = LobbyStep.DONE;
                 }
             }
-            case NPC_FALLBACK -> {
-                if (mc.screen instanceof AbstractContainerScreen<?>) {
-                    // NPC opened a GUI — scan it for game-mode items
-                    addLog("NPC opened GUI, scanning for game-mode items", LogLevel.INFO);
-                    engine.clearTasks();
-                    engine.addTask(new ContainerWalkTask());
-                    engine.start();
-                    lobbyStep = LobbyStep.NPC_GUI_SCAN;
-                } else {
-                    // NPC click likely transferred directly, or nothing happened
-                    addLog("NPC interaction complete, waiting for transfer", LogLevel.INFO);
-                    lobbyDoneAtTick = ticksInPhase;
+            case NPC_ITERATION -> {
+                if (activeNpcTask == null) {
                     lobbyStep = LobbyStep.DONE;
+                    return;
                 }
-            }
-            case NPC_GUI_SCAN -> {
-                addLog("NPC GUI scan complete, waiting for transfer", LogLevel.INFO);
-                lobbyDoneAtTick = ticksInPhase;
-                lobbyStep = LobbyStep.DONE;
+
+                if (npcSubStep == NpcSubStep.INSPECT) {
+                    EntityInspectTask.Result npcResult = activeNpcTask.getResult();
+
+                    if (npcResult == EntityInspectTask.Result.GUI_OPENED) {
+                        addLog("NPC opened GUI, scanning for game-mode items", LogLevel.INFO);
+                        npcContainerWalk = new ContainerWalkTask();
+                        engine.clearTasks();
+                        engine.addTask(npcContainerWalk);
+                        engine.start();
+                        npcSubStep = NpcSubStep.GUI_SCAN;
+                    } else if (npcResult == EntityInspectTask.Result.ALL_EXHAUSTED) {
+                        if (detectAuthChatMessages()) {
+                            addLog("Auth/captcha server detected (NPCs exhausted), skipping", LogLevel.WARN);
+                            proceedToDisconnectThen(() -> handleServerFailureNoRetry("auth/captcha required"));
+                            return;
+                        }
+                        addLog("All NPCs exhausted (" + MAX_NPC_ATTEMPTS + " tried), marking failed", LogLevel.WARN);
+                        lobbyStep = LobbyStep.DONE;
+                    } else {
+                        addLog("NPC interaction complete (possible transfer), waiting", LogLevel.INFO);
+                        lobbyDoneAtTick = ticksInPhase;
+                        lobbyStep = LobbyStep.DONE;
+                    }
+                } else if (npcSubStep == NpcSubStep.GUI_SCAN) {
+                    if (npcContainerWalk != null && npcContainerWalk.hasFailed()) {
+                        addLog("No game-mode match in NPC GUI, trying next NPC", LogLevel.INFO);
+                        if (activeNpcTask.resumeAfterGuiFail()) {
+                            engine.clearTasks();
+                            engine.addTask(activeNpcTask);
+                            engine.start();
+                            npcSubStep = NpcSubStep.INSPECT;
+                        } else {
+                            addLog("All NPCs exhausted, marking failed", LogLevel.WARN);
+                            lobbyStep = LobbyStep.DONE;
+                        }
+                    } else {
+                        addLog("NPC GUI scan matched, waiting for transfer", LogLevel.INFO);
+                        lobbyDoneAtTick = ticksInPhase;
+                        lobbyStep = LobbyStep.DONE;
+                    }
+                }
             }
             default -> lobbyStep = LobbyStep.DONE;
         }
     }
 
-    /** Complete the scan: save data, mark completed/failed, proceed to disconnect. */
+    private void startNpcIteration() {
+        npcAttemptCount = 0;
+        npcSubStep = NpcSubStep.INSPECT;
+        activeNpcTask = new EntityInspectTask(false, MAX_NPC_ATTEMPTS);
+        npcContainerWalk = null;
+        engine.clearTasks();
+        engine.addTask(activeNpcTask);
+        engine.start();
+        lobbyStep = LobbyStep.NPC_ITERATION;
+    }
+
     private void finishScan(DetectionPipeline pipeline) {
         double confidence = pipeline.getSessionConfidence().getConfidence();
         ServerSession session = sessionSupplier.get();
+
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.getConnection() != null && session != null) {
+            session.setPlayerCount(mc.getConnection().getOnlinePlayers().size());
+        }
         int pluginCount = session != null ? session.getPlugins().size() : 0;
 
         if (confidence < config.lobbyThreshold) {
@@ -448,6 +563,9 @@ public final class SequenceHandler {
             return;
         } else {
             addLog("Scan complete: " + pluginCount + " plugins detected", LogLevel.SUCCESS);
+            if (session != null) {
+                JsonLogger.writeLog(session.toLogData());
+            }
             markServerCompleted();
         }
         proceedToDisconnectOrDelay();
@@ -457,7 +575,6 @@ public final class SequenceHandler {
         if (disconnectEventReceived) {
             disconnectEventReceived = false;
             addLog("Disconnected from " + state.currentServer, LogLevel.INFO);
-            // Clean up any lingering screen
             if (mc.screen instanceof DisconnectedScreen) {
                 mc.execute(() -> mc.disconnect(new TitleScreen(), false));
             }
@@ -471,8 +588,7 @@ public final class SequenceHandler {
             return;
         }
 
-        // Timeout: 60 ticks (3 seconds)
-        if (ticksInPhase >= 60) {
+        if (ticksInPhase >= 20) {
             addLog("Disconnect timed out, forcing", LogLevel.WARN);
             disconnectEventReceived = false;
             if (mc.screen instanceof DisconnectedScreen) {
@@ -499,8 +615,6 @@ public final class SequenceHandler {
         }
     }
 
-    // -- Settings save/restore --
-
     private void saveAndDisableSettings() {
         ArchivistConfig mainConfig = ArchivistMod.getInstance().getConfig();
         savedPassiveGuiDetection = mainConfig.passiveGuiDetection;
@@ -512,12 +626,9 @@ public final class SequenceHandler {
         mainConfig.passiveGuiDetection = savedPassiveGuiDetection;
     }
 
-    // -- Failure handling --
-
     private void handleServerFailure(String reason) {
         consecutiveFailures++;
 
-        // Check retry
         if (currentServerRetries < config.maxRetriesPerServer) {
             currentServerRetries++;
             addLog("Retrying " + state.currentServer + " (attempt " + (currentServerRetries + 1) + "/"
@@ -530,7 +641,6 @@ public final class SequenceHandler {
             return;
         }
 
-        // Max retries exhausted
         state.markFailed(state.currentServer, reason);
         currentServerRetries = 0;
         retryingSameServer = false;
@@ -585,18 +695,12 @@ public final class SequenceHandler {
         }
     }
 
-    // -- Helpers --
-
-    /** Build a skip predicate for servers that already have log files. */
     private java.util.function.Predicate<String> buildSkipPredicate() {
         if (!config.skipAlreadyLogged) return null;
         Path logsDir = JsonLogger.getLogsDirectory();
         return server -> {
-            // Sanitize colon for Windows path safety
             String safe = server.replace(":", "_");
-            // Check sanitized name (e.g., play.solarciv.com_42142.json)
             if (Files.exists(logsDir.resolve(safe + ".json"))) return true;
-            // Check without port (e.g., play.solarciv.com.json)
             if (server.contains(":")) {
                 String noPort = server.substring(0, server.lastIndexOf(':'));
                 if (Files.exists(logsDir.resolve(noPort + ".json"))) return true;
@@ -612,6 +716,7 @@ public final class SequenceHandler {
         String next = state.getNextServer(currentServerList, buildSkipPredicate());
         if (next == null) {
             state.status = SequenceState.RunStatus.COMPLETED;
+            state.stoppedAtEpochMs = System.currentTimeMillis();
             state.save();
             setPhase(Phase.COMPLETED);
             restoreSettings();
@@ -623,7 +728,6 @@ public final class SequenceHandler {
         }
 
         state.currentServer = next;
-        // currentIndex already set by getNextServer()
         state.save();
 
         addLog("Connecting to " + next + " (" + (state.getCompletedCount() + state.getFailedCount() + 1)
@@ -650,13 +754,11 @@ public final class SequenceHandler {
         Minecraft mc = Minecraft.getInstance();
         mc.execute(() -> {
             try {
-                // Ensure we're on a clean screen first
                 if (mc.screen instanceof DisconnectedScreen) {
                     mc.disconnect(new TitleScreen(), false);
                 }
                 ServerData serverData = new ServerData(server, server, ServerData.Type.OTHER);
                 ServerAddress parsed = ServerAddress.parseString(server);
-                // Use TitleScreen as parent so failed connections go to a clean state
                 ConnectScreen.startConnecting(new TitleScreen(), mc, parsed, serverData, false, null);
             } catch (Exception e) {
                 addLog("Failed to connect to " + server + ": " + e.getMessage(), LogLevel.ERROR);
@@ -669,11 +771,11 @@ public final class SequenceHandler {
         disconnectEventReceived = false;
         mc.execute(() -> {
             try {
-                mc.disconnect(new TitleScreen(), false);  // Minecraft's own clean disconnect
+                mc.disconnect(new TitleScreen(), false);
             } catch (Exception e) {
                 LOGGER.warn("Error during disconnect", e);
-                disconnectEventReceived = true;
             }
+            disconnectEventReceived = true;
         });
     }
 
@@ -691,7 +793,6 @@ public final class SequenceHandler {
         state.ticksSincePhaseStart = 0;
     }
 
-    /** Try to extract the disconnect reason text from a DisconnectedScreen. */
     private String extractDisconnectReason(Minecraft mc) {
         if (!(mc.screen instanceof DisconnectedScreen ds)) return "unknown";
         try {
@@ -726,11 +827,8 @@ public final class SequenceHandler {
     }
 
     private void postEvent(String message) {
-        // Kept for backward compat, now routes through addLog
         addLog(message, LogLevel.INFO);
     }
-
-    // -- Getters for GUI --
 
     public Phase getPhase() { return phase; }
     public SequenceState getState() { return state; }

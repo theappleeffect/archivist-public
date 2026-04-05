@@ -5,11 +5,6 @@ import com.archivist.gui.render.RenderUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 
-/**
- * Themed toast notification shown at the bottom of the screen.
- * Supports different toast types (copy confirmation, lobby detection, etc.).
- * Static singleton following the TooltipManager pattern.
- */
 public class CopyToast {
 
     public enum ToastType { COPY, LOBBY }
@@ -21,11 +16,10 @@ public class CopyToast {
 
     private static final float FADE_IN_SPEED = 0.2f;
     private static final float FADE_OUT_SPEED = 0.1f;
-    private static final float HOLD_DURATION = 30f;
-    private static final float LOBBY_HOLD_DURATION = 60f;
+    private static final float HOLD_DURATION = 90f;
+    private static final float LOBBY_HOLD_DURATION = 180f;
     private static final int SLIDE_OFFSET = 4;
 
-    // Yellow glow pulse for lobby toast
     private static float glowPhase = 0f;
 
     private enum State { HIDDEN, FADE_IN, HOLD, FADE_OUT }
@@ -100,7 +94,6 @@ public class CopyToast {
         int alpha = (int) (animProgress * 255);
 
         if (toastType == ToastType.LOBBY) {
-            // Yellow glow effect
             float glow = 0.5f + 0.5f * (float) Math.sin(glowPhase);
             int glowAlpha = (int) (alpha * 0.3f * glow);
             int yellowGlow = (glowAlpha << 24) | (ColorScheme.withAlpha(cs.accent(), 0x00) & 0x00FFFFFF);
