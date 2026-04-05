@@ -8,6 +8,9 @@ A Fabric mod for Minecraft that automatically detects and logs server plugins, s
 
   When you join a server, Archivist passively identifies what plugins, server software, and configuration it's
   running. Results are logged locally and can optionally be uploaded to the Archivist db or other databases.
+  
+  **PRESS (Z) to open the mod menu:**
+  <img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/2729be6d-d605-4ce1-8084-a55253ef07ba" />
 
   Detection
   - Identifies plugins through command trees, plugin channels, namespaces, brand strings, and GUI
