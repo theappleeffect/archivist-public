@@ -8,32 +8,34 @@ import com.archivist.gui.render.RenderUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 
-/**
- * A small themed HUD overlay that shows scan progress after joining a server.
- * Appears in the bottom-right corner when the mod GUI is not open.
- * Fades out like a toast once all operations complete.
- *
- * <p>When automation is running, switches to automation mode showing
- * progress (X/Y), ETA, and current server.</p>
- */
 public class ScanProgressOverlay {
 
-    private static final int FADE_OUT_DURATION = 40; // 2 seconds at 20 tps
     private static final int WIDTH = 130;
     private static final int HEIGHT = 28;
     private static final int MARGIN = 6;
 
+    private static final float SLIDE_IN_SPEED = 0.12f;
+    private static final float SLIDE_OUT_SPEED = 0.08f;
+    private static final float HOLD_DURATION = 90f;
+
     private final ArchivistConfig config;
     private final DetectionPipeline pipeline;
 
-    // Optional automation orchestrator reference
     private SequenceHandler orchestrator;
 
-    private boolean active = false;
+    private enum OverlayState { HIDDEN, PENDING, SLIDE_IN, HOLD, SLIDE_OUT }
+    private OverlayState overlayState = OverlayState.HIDDEN;
+
     private int estimatedTicks = 0;
     private int elapsedTicks = 0;
-    private int fadeOutTicks = 0;
-    private boolean fading = false;
+    private float slideProgress = 0f;
+    private float holdTimer = 0f;
+
+    private java.util.function.Supplier<String> domainSupplier;
+    private String cachedResult = "";
+    private int cachedResultColor = 0xFFFFFFFF;
+    private int cachedBorderColor = 0xFFFFFFFF;
+    private boolean showConfidence = true;
 
     public ScanProgressOverlay(ArchivistConfig config, DetectionPipeline pipeline) {
         this.config = config;
@@ -44,137 +46,151 @@ public class ScanProgressOverlay {
         this.orchestrator = orchestrator;
     }
 
-    /**
-     * Start showing the overlay with an estimated total scan time.
-     * Called on server join after calculating the estimate.
-     */
+    public void setDomainSupplier(java.util.function.Supplier<String> supplier) {
+        this.domainSupplier = supplier;
+    }
+
     public void startScan(int estimatedTotalTicks) {
         if (!isEnabled()) return;
         this.estimatedTicks = Math.max(20, estimatedTotalTicks);
         this.elapsedTicks = 0;
-        this.fadeOutTicks = 0;
-        this.fading = false;
-        this.active = true;
+        this.holdTimer = 0;
+        this.slideProgress = 0f;
+
+        String domain = domainSupplier != null ? domainSupplier.get() : "unknown";
+        if (config.isExcluded(domain)) {
+            cachedResult = "\u26D4 Excluded";
+            cachedResultColor = 0xFFFF4444;
+            cachedBorderColor = 0xFFFF4444;
+            showConfidence = false;
+            overlayState = OverlayState.SLIDE_IN;
+        } else if (config.isException(domain)) {
+            cachedResult = "\u26A0 Exception";
+            cachedResultColor = 0xFFFFAA00;
+            cachedBorderColor = 0xFFFFAA00;
+            showConfidence = false;
+            overlayState = OverlayState.SLIDE_IN;
+        } else {
+            cachedResult = "Thinking...";
+            cachedResultColor = 0xFF88DDDD;
+            cachedBorderColor = ColorScheme.get().tooltipBorder();
+            showConfidence = true;
+            overlayState = OverlayState.SLIDE_IN;
+        }
     }
 
-    /** Called every client tick to update countdown state. */
     public void tick() {
-        if (!active && !isAutomationRunning()) return;
-        if (!active) return; // automation mode handled in render
-
-        if (fading) {
-            fadeOutTicks++;
-            if (fadeOutTicks >= FADE_OUT_DURATION) {
-                active = false;
+        if (overlayState == OverlayState.HIDDEN) return;
+        if (showConfidence && cachedResult.equals("Thinking...")) {
+            elapsedTicks++;
+            if (isAllDone()) {
+                determineResult();
+                holdTimer = 0f;
+                if (overlayState == OverlayState.HOLD) {
+                }
             }
-            return;
-        }
-
-        elapsedTicks++;
-
-        if (isAllDone()) {
-            fading = true;
-            fadeOutTicks = 0;
         }
     }
 
-    /** Render the overlay on the HUD. */
+    private void tickAnimation() {
+        switch (overlayState) {
+            case SLIDE_IN -> {
+                slideProgress += SLIDE_IN_SPEED;
+                if (slideProgress >= 1f) {
+                    slideProgress = 1f;
+                    overlayState = OverlayState.HOLD;
+                    holdTimer = 0f;
+                }
+            }
+            case HOLD -> {
+                if (cachedResult.equals("Thinking...")) {
+                } else {
+                    holdTimer += 1f;
+                    if (holdTimer >= HOLD_DURATION) {
+                        overlayState = OverlayState.SLIDE_OUT;
+                    }
+                }
+            }
+            case SLIDE_OUT -> {
+                slideProgress -= SLIDE_OUT_SPEED;
+                if (slideProgress <= 0f) {
+                    slideProgress = 0f;
+                    overlayState = OverlayState.HIDDEN;
+                }
+            }
+            default -> {}
+        }
+    }
+
+    private void determineResult() {
+        double sessionConf = pipeline.getSessionConfidence().getConfidence();
+        boolean isLobby = sessionConf < 0.4;
+        boolean isUncertain = sessionConf >= 0.4 && sessionConf <= 0.7;
+
+        ColorScheme cs = ColorScheme.get();
+
+        if (isLobby) {
+            cachedResult = "You are in a Lobby";
+            cachedResultColor = 0xFFFFDD44;
+            cachedBorderColor = 0xFFFFAA00;
+        } else if (isUncertain) {
+            cachedResult = "Uncertain";
+            cachedResultColor = cs.textPrimary();
+            cachedBorderColor = cs.tooltipBorder();
+        } else {
+            cachedResult = "You are in a Server";
+            cachedResultColor = cs.accent();
+            cachedBorderColor = cs.accent();
+        }
+    }
+
     public void render(GuiGraphics g) {
         if (!isEnabled()) return;
 
         Minecraft mc = Minecraft.getInstance();
-        if (mc.screen != null) return; // don't draw over any screen
+        if (mc.screen != null) return;
 
-        // Automation mode takes priority
         if (isAutomationRunning()) {
             renderAutomationMode(g, mc);
             return;
         }
 
-        if (!active) return;
-        renderScanMode(g, mc);
+        if (overlayState == OverlayState.HIDDEN) return;
+        tickAnimation();
+        renderScanResult(g, mc);
     }
 
-    private void renderScanMode(GuiGraphics g, Minecraft mc) {
+    private void renderScanResult(GuiGraphics g, Minecraft mc) {
         int screenW = mc.getWindow().getGuiScaledWidth();
         int screenH = mc.getWindow().getGuiScaledHeight();
 
-        int x = screenW - WIDTH - MARGIN;
-        int y = screenH - HEIGHT - MARGIN - 40; // above hotbar area
+        int slideOffset = (int) ((1f - slideProgress) * (WIDTH + MARGIN));
+        int x = screenW - WIDTH - MARGIN + slideOffset;
+        int y = screenH - HEIGHT - MARGIN - 40;
 
-        // Calculate alpha for fade-out
-        int alpha = 255;
-        if (fading) {
-            alpha = Math.max(0, 255 - (255 * fadeOutTicks / FADE_OUT_DURATION));
-        }
+        int alpha = (int) (slideProgress * 255);
         if (alpha <= 0) return;
 
         ColorScheme cs = ColorScheme.get();
 
-        // Lobby detection result
-        double sessionConf = pipeline.getSessionConfidence().getConfidence();
-        boolean isLobby = fading && sessionConf < 0.4;
-        boolean isUncertain = fading && sessionConf >= 0.4 && sessionConf <= 0.7;
-
-        // Apply alpha to colors
         int bg = applyAlpha(cs.tooltipBg(), alpha);
-        int border = isLobby ? applyAlpha(0xFFFFAA00, alpha) : applyAlpha(cs.tooltipBorder(), alpha);
+        int border = applyAlpha(cachedBorderColor, alpha);
         int accent = applyAlpha(cs.accent(), alpha);
-        int accentDim = applyAlpha(cs.accentDim(), alpha);
-        int textPrimary = applyAlpha(cs.textPrimary(), alpha);
-        int yellowText = applyAlpha(0xFFFFDD44, alpha);
+        int textPrimary = applyAlpha(cachedResultColor, alpha);
 
-        // Background + border
         RenderUtils.drawRect(g, x, y, WIDTH, HEIGHT, bg);
         RenderUtils.drawBorder(g, x, y, WIDTH, HEIGHT, border);
 
-        // "Archivist" label (top-left)
-        RenderUtils.drawText(g, "Archivist", x + 4, y + 3, accent);
+        RenderUtils.drawText(g, "Archivist", x + 4, y + 3, applyAlpha(cs.accent(), alpha));
 
-        // Remaining time / confidence (top-right)
-        String timeText;
-        int timeColor = textPrimary;
-        if (fading) {
-            timeText = String.format("%.0f%%", sessionConf * 100);
-            if (isLobby) timeColor = yellowText;
-        } else {
-            int remainingTicks = Math.max(0, estimatedTicks - elapsedTicks);
-            int remainingSecs = (remainingTicks + 19) / 20;
-            timeText = remainingSecs + "s";
+        if (showConfidence) {
+            double sessionConf = pipeline.getSessionConfidence().getConfidence();
+            String confText = String.format("%.0f%%", sessionConf * 100);
+            int confWidth = RenderUtils.scaledTextWidth(confText);
+            RenderUtils.drawText(g, confText, x + WIDTH - confWidth - 4, y + 3, applyAlpha(cs.textPrimary(), alpha));
         }
-        int timeWidth = RenderUtils.scaledTextWidth(timeText);
-        RenderUtils.drawText(g, timeText, x + WIDTH - timeWidth - 4, y + 3, timeColor);
 
-        // Status label
-        String statusText;
-        int statusColor = textPrimary;
-        if (!fading) {
-            statusText = "Scanning...";
-        } else if (isLobby) {
-            statusText = "\u26A0 Lobby Detected";
-            statusColor = yellowText;
-        } else if (isUncertain) {
-            statusText = "Uncertain";
-        } else {
-            statusText = "Server";
-            statusColor = accent;
-        }
-        RenderUtils.drawText(g, statusText, x + 4, y + 12, statusColor);
-
-        // Progress bar
-        int barX = x + 4;
-        int barY = y + HEIGHT - 6;
-        int barW = WIDTH - 8;
-        int barH = 3;
-
-        float progress = Math.min(1.0f, (float) elapsedTicks / estimatedTicks);
-        int filledW = (int) (barW * progress);
-
-        RenderUtils.drawRect(g, barX, barY, barW, barH, applyAlpha(cs.scrollbarTrack(), alpha));
-        if (filledW > 0) {
-            int barColor = isLobby ? applyAlpha(0xFFFFAA00, alpha) : accentDim;
-            RenderUtils.drawRect(g, barX, barY, filledW, barH, barColor);
-        }
+        RenderUtils.drawText(g, cachedResult, x + 4, y + 12, textPrimary);
     }
 
     private void renderAutomationMode(GuiGraphics g, Minecraft mc) {
@@ -187,46 +203,87 @@ public class ScanProgressOverlay {
         int y = screenH - HEIGHT - MARGIN - 40;
 
         ColorScheme cs = ColorScheme.get();
-        int bg = cs.tooltipBg();
-        int border = cs.accent();
-        int textPrimary = cs.textPrimary();
-        int accent = cs.accent();
-        int accentDim = cs.accentDim();
-
-        // Background + border
-        RenderUtils.drawRect(g, x, y, WIDTH, HEIGHT, bg);
-        RenderUtils.drawBorder(g, x, y, WIDTH, HEIGHT, border);
-
-        // "Automation" label (top-left)
-        RenderUtils.drawText(g, "Automation", x + 4, y + 3, accent);
-
-        // ETA (top-right)
+        var autoPhase = orchestrator.getPhase();
         var autoState = orchestrator.getState();
         int completed = autoState.getCompletedCount();
         int failed = autoState.getFailedCount();
         int total = orchestrator.getCurrentServerList().size();
 
-        String etaText = "";
-        if (completed + failed > 0) {
-            long elapsedMs = orchestrator.getElapsedMs();
-            long avgMs = elapsedMs / (completed + failed);
-            int remaining = autoState.getRemainingCount(total);
-            long etaMs = avgMs * remaining;
-            etaText = "~" + formatDuration(etaMs);
+        String domain = domainSupplier != null ? domainSupplier.get() : "unknown";
+        boolean isExcluded = config.isExcluded(domain);
+        boolean isException = config.isException(domain);
+
+        double sessionConf = pipeline.getSessionConfidence().getConfidence();
+        boolean isLobby = autoPhase == SequenceHandler.Phase.SCANNING && sessionConf < 0.4;
+
+        int border;
+        String statusText;
+        int statusColor;
+
+        if (isExcluded) {
+            border = 0xFFFF4444;
+            statusText = "Excluded \u2014 skipping";
+            statusColor = 0xFFFF4444;
+        } else if (isException) {
+            border = 0xFFFFAA00;
+            statusText = "Exception";
+            statusColor = 0xFFFFAA00;
         } else {
-            etaText = (completed + failed) + "/" + total;
+            switch (autoPhase) {
+                case CONNECTING -> {
+                    border = cs.accent();
+                    statusText = "Connecting...";
+                    statusColor = cs.textSecondary();
+                }
+                case SCANNING -> {
+                    if (isLobby) {
+                        border = 0xFFFFAA00;
+                        statusText = "Lobby \u2014 searching...";
+                        statusColor = 0xFFFFDD44;
+                    } else if (pipeline.isScanComplete()) {
+                        border = cs.accent();
+                        statusText = "Server \u2014 logging";
+                        statusColor = cs.accent();
+                    } else {
+                        border = cs.accent();
+                        statusText = "Thinking...";
+                        statusColor = 0xFF88DDDD;
+                    }
+                }
+                case DISCONNECTING -> {
+                    border = cs.accent();
+                    statusText = "Disconnecting...";
+                    statusColor = cs.textSecondary();
+                }
+                case DELAY -> {
+                    border = cs.accent();
+                    statusText = "Next server...";
+                    statusColor = cs.textSecondary();
+                }
+                default -> {
+                    border = cs.accent();
+                    statusText = autoPhase.name();
+                    statusColor = cs.textSecondary();
+                }
+            }
         }
-        int etaWidth = RenderUtils.scaledTextWidth(etaText);
-        RenderUtils.drawText(g, etaText, x + WIDTH - etaWidth - 4, y + 3, textPrimary);
 
-        // Status line: current server (truncated) or phase
-        String serverName = orchestrator.getCurrentServerDisplay();
-        if (serverName.length() > 20) {
-            serverName = serverName.substring(0, 18) + "..";
+        int bg = cs.tooltipBg();
+        RenderUtils.drawRect(g, x, y, WIDTH, HEIGHT, bg);
+        RenderUtils.drawBorder(g, x, y, WIDTH, HEIGHT, border);
+
+        RenderUtils.drawText(g, "Automation", x + 4, y + 3, cs.accent());
+
+        String progressText = (completed + failed) + "/" + total;
+        int progressW = RenderUtils.scaledTextWidth(progressText);
+        RenderUtils.drawText(g, progressText, x + WIDTH - progressW - 4, y + 3, cs.textPrimary());
+
+        String serverIp = orchestrator.getCurrentServerDisplay();
+        if (serverIp.length() > 22) {
+            serverIp = RenderUtils.trimToWidth(serverIp, WIDTH - 12);
         }
-        RenderUtils.drawText(g, serverName, x + 4, y + 12, textPrimary);
+        RenderUtils.drawText(g, serverIp, x + 4, y + 12, statusColor);
 
-        // Progress bar
         int barX = x + 4;
         int barY = y + HEIGHT - 6;
         int barW = WIDTH - 8;
@@ -237,7 +294,8 @@ public class ScanProgressOverlay {
 
         RenderUtils.drawRect(g, barX, barY, barW, barH, cs.scrollbarTrack());
         if (filledW > 0) {
-            RenderUtils.drawRect(g, barX, barY, filledW, barH, accentDim);
+            int barColor = isLobby ? 0xFFFFAA00 : cs.accentDim();
+            RenderUtils.drawRect(g, barX, barY, filledW, barH, barColor);
         }
     }
 
@@ -248,12 +306,13 @@ public class ScanProgressOverlay {
                 && phase != SequenceHandler.Phase.COMPLETED;
     }
 
-    /** Reset on disconnect. */
     public void reset() {
-        active = false;
-        fading = false;
+        overlayState = OverlayState.HIDDEN;
+        slideProgress = 0f;
         elapsedTicks = 0;
-        fadeOutTicks = 0;
+        holdTimer = 0;
+        cachedResult = "";
+        showConfidence = true;
     }
 
     private boolean isEnabled() {

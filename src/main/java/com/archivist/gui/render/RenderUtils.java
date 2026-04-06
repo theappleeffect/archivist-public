@@ -82,8 +82,45 @@ public final class RenderUtils {
     public static void drawScaledText(GuiGraphics g, String text, int x, int y, int color, boolean shadow) {
         var mc = Minecraft.getInstance();
         if (mc == null || mc.font == null) return;
-        var font = mc.font;
         float s = TEXT_SCALE;
+        AWTFontRenderer customFont = getCustomFont();
+        if (customFont != null && customFont.isReady()) {
+            var pose = g.pose();
+            if (shadow) {
+                int shadowColor = (color & 0xFCFCFC) >> 2 | (color & 0xFF000000);
+                //? if >=1.21.9 {
+                pose.pushMatrix();
+                pose.translate(x + 1, y + 1);
+                pose.scale(s, s);
+                //?} else {
+                /*pose.pushPose();
+                pose.translate(x + 1, y + 1, 0);
+                pose.scale(s, s, 1);*/
+                //?}
+                customFont.drawString(g, text, 0, 0, shadowColor, false);
+                //? if >=1.21.9
+                pose.popMatrix();
+                //? if <1.21.9
+                /*pose.popPose();*/
+            }
+            //? if >=1.21.9 {
+            pose.pushMatrix();
+            pose.translate(x, y);
+            pose.scale(s, s);
+            //?} else {
+            /*pose.pushPose();
+            pose.translate(x, y, 0);
+            pose.scale(s, s, 1);*/
+            //?}
+            TextSelectionManager.checkAndHighlight(g, text, x, y, s);
+            customFont.drawString(g, text, 0, 0, color, false);
+            //? if >=1.21.9
+            pose.popMatrix();
+            //? if <1.21.9
+            /*pose.popPose();*/
+            return;
+        }
+        var font = mc.font;
         var pose = g.pose();
         //? if >=1.21.9 {
         pose.pushMatrix();
@@ -127,6 +164,10 @@ public final class RenderUtils {
 
     /** Effective line height after scaling. */
     public static int scaledFontHeight() {
+        AWTFontRenderer customFont = getCustomFont();
+        if (customFont != null && customFont.isReady()) {
+            return (int) (customFont.lineHeight() * TEXT_SCALE);
+        }
         var mc = Minecraft.getInstance();
         if (mc == null || mc.font == null) return 0;
         return (int) (mc.font.lineHeight * TEXT_SCALE);
@@ -134,6 +175,10 @@ public final class RenderUtils {
 
     /** Effective string width after scaling. */
     public static int scaledTextWidth(String text) {
+        AWTFontRenderer customFont = getCustomFont();
+        if (customFont != null && customFont.isReady()) {
+            return (int) (customFont.width(text) * TEXT_SCALE);
+        }
         var mc = Minecraft.getInstance();
         if (mc == null || mc.font == null) return 0;
         return (int) (mc.font.width(text) * TEXT_SCALE);
@@ -290,5 +335,15 @@ public final class RenderUtils {
 
     public static void disableScissor(GuiGraphics g) {
         g.disableScissor();
+    }
+
+    public static AWTFontRenderer getCustomFont() {
+        String selected = com.archivist.ArchivistMod.getInstance() != null
+                ? com.archivist.ArchivistMod.getInstance().getConfig().selectedFont : "default";
+        return FontManager.getRenderer(selected);
+    }
+
+    public static net.minecraft.client.gui.Font getActiveFont() {
+        return Minecraft.getInstance().font;
     }
 }

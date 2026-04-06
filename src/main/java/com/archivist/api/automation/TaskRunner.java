@@ -36,6 +36,8 @@ public final class TaskRunner {
     // Kill switch: tracks whether player pressed a key since last tick
     private volatile boolean killRequested = false;
 
+    private boolean lobbyCommitted = false;
+
     public TaskRunner(EventBus eventBus, Supplier<SessionConfidence> confidenceSupplier) {
         this.eventBus = eventBus;
         this.confidenceSupplier = confidenceSupplier;
@@ -58,6 +60,7 @@ public final class TaskRunner {
             currentTask.abort();
             currentTask = null;
         }
+        lobbyCommitted = false;
     }
 
     /**
@@ -125,10 +128,9 @@ public final class TaskRunner {
                 postEvent("Task complete: " + currentTask.getDescription());
                 currentTask = null;
             } else {
-                // Lobby check for physical interaction tasks
                 if (currentTask.requiresLobby()) {
                     double conf = confidenceSupplier.get().getConfidence();
-                    if (conf >= lobbyThreshold) {
+                    if (conf >= lobbyThreshold && !lobbyCommitted) {
                         postEvent("Skipping task (not in lobby, confidence " +
                                 String.format("%.0f%%", conf * 100) + "): " + currentTask.getDescription());
                         currentTask.abort();
@@ -149,6 +151,9 @@ public final class TaskRunner {
         if (!taskQueue.isEmpty()) {
             currentTask = taskQueue.pollFirst();
             if (currentTask != null) {
+                if (currentTask.requiresLobby()) {
+                    lobbyCommitted = true;
+                }
                 postEvent("Starting task: " + currentTask.getDescription());
                 currentTask.start(Minecraft.getInstance());
             }

@@ -67,11 +67,9 @@ public final class SessionConfidence {
 
     // Item display name keywords that scream "lobby"
     private static final Set<String> LOBBY_ITEM_NAME_KEYWORDS = Set.of(
-            "selector", "navigator", "lobby", "hub", "server", "play",
-            "profile", "cosmetic", "gadget", "settings", "shop", "store",
+            "selector", "navigator", "lobby", "hub",
             "game menu", "game selector", "server selector", "teleporter",
-            "compass", "leave", "quit", "back to", "cosmetics", "pets",
-            "trails", "particles", "visibility", "players", "friends"
+            "leave", "quit"
     );
 
     private static final Set<String> SCOREBOARD_LOBBY_KEYWORDS = Set.of(
@@ -161,7 +159,7 @@ public final class SessionConfidence {
      */
     public boolean onCommandTree() {
         commandTreeCount++;
-        if (commandTreeCount > 1) {
+        if (commandTreeCount == 2) {
             transferred = true;
             // Clear all signals — new server, fresh evaluation
             lobbySignals.clear();
@@ -188,15 +186,19 @@ public final class SessionConfidence {
         if (commandsProcessed || commands == null || commands.isEmpty()) return;
         commandsProcessed = true;
 
+        Set<String> strippedCommands = new java.util.HashSet<>();
+        for (String cmd : commands) {
+            String bare = cmd.contains(":") ? cmd.substring(cmd.indexOf(':') + 1) : cmd;
+            strippedCommands.add(bare.toLowerCase(Locale.ROOT));
+        }
+
         int total = commands.size();
         int survivalCount = 0;
         boolean hasServerCmd = false;
         boolean hasLobbyCmd = false;
         List<String> matchedSurvival = new java.util.ArrayList<>();
 
-        for (String cmd : commands) {
-            String lower = cmd.toLowerCase(Locale.ROOT);
-            if (lower.contains(":")) lower = lower.substring(lower.indexOf(':') + 1);
+        for (String lower : strippedCommands) {
             if (SURVIVAL_COMMANDS.contains(lower)) {
                 survivalCount++;
                 matchedSurvival.add(lower);
@@ -348,7 +350,7 @@ public final class SessionConfidence {
     public void onInventoryTick(Player player) {
         if (inventoryChecked || player == null) return;
         inventoryCheckDelay++;
-        if (inventoryCheckDelay < 40) return; // 2 second delay
+        if (inventoryCheckDelay < 20) return;
         inventoryChecked = true;
 
         Inventory inv = player.getInventory();
@@ -361,15 +363,6 @@ public final class SessionConfidence {
             if (stack.isEmpty()) continue;
 
             Item item = stack.getItem();
-
-            // Lobby selector item TYPES → force lobby
-            if (item == Items.COMPASS || item == Items.CLOCK
-                    || item == Items.NETHER_STAR || item == Items.PLAYER_HEAD) {
-                String typeName = item == Items.COMPASS ? "compass" : item == Items.CLOCK ? "clock"
-                        : item == Items.NETHER_STAR ? "nether star" : "player head";
-                LOGGER.info("[DEBUG] FORCE LOBBY: has item type: {}", typeName);
-                setForceLobby("has item: " + typeName);
-            }
 
             // Lobby selector item NAMES → force lobby
             if (stack.has(net.minecraft.core.component.DataComponents.CUSTOM_NAME)) {
@@ -435,17 +428,18 @@ public final class SessionConfidence {
     public boolean isForceReal() { return forceReal; }
     public boolean isAdventureModeDetected() { return adventureModeDetected; }
     public boolean isLowCommandCount() { return lowCommandCount; }
+    public boolean isInventoryChecked() { return inventoryChecked; }
 
     // ── Score Computation ──
 
     public double getConfidence() {
-        if (forceLobby) {
-            LOGGER.debug("[DEBUG] getConfidence: forceLobby=true → 0.05");
-            return 0.05;
-        }
         if (forceReal) {
             LOGGER.debug("[DEBUG] getConfidence: forceReal=true → 0.95");
             return 0.95;
+        }
+        if (forceLobby) {
+            LOGGER.debug("[DEBUG] getConfidence: forceLobby=true → 0.05");
+            return 0.05;
         }
 
         var lobbySnap = List.copyOf(lobbySignals);

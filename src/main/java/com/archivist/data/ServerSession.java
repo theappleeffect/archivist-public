@@ -1,7 +1,9 @@
 package com.archivist.data;
 
 import com.archivist.detection.Detection;
+import com.archivist.detection.DetectionConstants;
 import com.archivist.detection.DetectionType;
+import com.archivist.detection.PluginGlossary;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -9,10 +11,6 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-/**
- * In-memory mutable model for the current server connection.
- * All fields are thread-safe via volatile, concurrent collections, or synchronization.
- */
 public final class ServerSession {
 
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
@@ -26,7 +24,8 @@ public final class ServerSession {
     private volatile String dimension = "minecraft:overworld";
     private volatile String resourcePack = null;
     private volatile int playerCount = 0;
-    private volatile int maxPlayers = 0;
+    private volatile int maxPlayers = -1;
+    private PluginGlossary glossary;
 
     private final Set<String> plugins = ConcurrentHashMap.newKeySet();
     private final CopyOnWriteArrayList<ServerLogData.GuiPluginEntry> guiPlugins = new CopyOnWriteArrayList<>();
@@ -34,7 +33,6 @@ public final class ServerSession {
     private final Set<String> detectedGameAddresses = ConcurrentHashMap.newKeySet();
     private final CopyOnWriteArrayList<ServerLogData.WorldEntry> worlds = new CopyOnWriteArrayList<>();
 
-    // Confidence-based detection storage
     private final CopyOnWriteArrayList<Detection> detections = new CopyOnWriteArrayList<>();
     private final ConcurrentHashMap<String, Double> pluginConfidence = new ConcurrentHashMap<>();
 
@@ -42,6 +40,10 @@ public final class ServerSession {
 
     public ServerSession(EventBus events) {
         this.events = events;
+    }
+
+    public void setGlossary(PluginGlossary glossary) {
+        this.glossary = glossary;
     }
 
     public String getIp() { return ip; }
@@ -73,45 +75,52 @@ public final class ServerSession {
     public EventBus getEvents() { return events; }
     public List<Detection> getDetections() { return Collections.unmodifiableList(detections); }
 
-    /**
-     * Get the merged confidence for a specific plugin (0.0-1.0).
-     * Returns 0 if plugin not detected.
-     */
     public double getPluginConfidence(String pluginName) {
         return pluginConfidence.getOrDefault(pluginName, 0.0);
     }
 
-    /**
-     * Get all plugins sorted by confidence (highest first).
-     */
     public List<Map.Entry<String, Double>> getPluginsByConfidence() {
         return pluginConfidence.entrySet().stream()
                 .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
                 .toList();
     }
 
-    /**
-     * Adds a plugin from a specific detection method with confidence.
-     * Merges confidence if plugin was already detected by another method.
-     */
+    public void boostConfidence(String pluginName, double floor) {
+        pluginConfidence.computeIfPresent(pluginName, (k, current) -> Math.max(current, floor));
+    }
+
     public void addDetection(Detection detection) {
         if (detection == null || detection.value() == null || detection.value().isBlank()) return;
-        detections.add(detection);
+        String name = detection.value().toLowerCase(java.util.Locale.ROOT);
+        if (name.length() < 3) return;
+        if (name.contains(" ") || name.contains("/")) return;
+        boolean inGlossary = glossary != null && glossary.contains(name);
+        if (name.length() < 5 && !inGlossary) return;
+        if (DetectionConstants.COMMON_WORDS.contains(name) && !inGlossary) return;
 
-        String name = detection.value();
-        pluginConfidence.merge(name, detection.confidence(), Detection::mergeConfidence);
+        for (String existing : plugins) {
+            if (name.startsWith(existing)) return;
+        }
+        List<String> toRemove = new ArrayList<>();
+        for (String existing : plugins) {
+            if (existing.startsWith(name)) toRemove.add(existing);
+        }
+        for (String r : toRemove) {
+            plugins.remove(r);
+            pluginConfidence.remove(r);
+        }
+
+        Detection norm = new Detection(name, detection.type(), detection.confidence(), detection.source());
+        detections.add(norm);
+        pluginConfidence.merge(name, norm.confidence(), Detection::mergeConfidence);
 
         if (plugins.add(name)) {
-            String pct = String.format("%.0f%%", detection.confidence() * 100);
+            String pct = String.format("%.0f%%", norm.confidence() * 100);
             events.post(new LogEvent(LogEvent.Type.PLUGIN,
-                    "Detected: " + name + " [" + detection.type().name() + " " + pct + "]"));
+                    "Detected: " + name + " [" + norm.type().name() + " " + pct + "]"));
         }
     }
 
-    /**
-     * Adds a plugin name with default confidence (backward compat).
-     * Uses MANUAL type at 1.0 confidence.
-     */
     public void addPlugin(String name) {
         if (name == null || name.isBlank()) return;
         addDetection(Detection.of(name, DetectionType.MANUAL, "legacy addPlugin"));
@@ -139,10 +148,6 @@ public final class ServerSession {
         events.post(new LogEvent(LogEvent.Type.WORLD, "World: " + dimension));
     }
 
-    /**
-     * Discard all detection data (called on proxy transfer).
-     * Keeps connection metadata but clears plugins and detections.
-     */
     public void discardDetections() {
         plugins.clear();
         pluginConfidence.clear();

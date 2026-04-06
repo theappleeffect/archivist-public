@@ -7,10 +7,6 @@ import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
 
-/**
- * Walks the Brigadier command tree to extract plugin namespaces and commands.
- * Does not directly access network packets.
- */
 public final class CommandTreeScanner {
 
     private static final Set<String> IGNORED_NAMESPACES = DetectionConstants.IGNORED_NAMESPACES;
@@ -26,19 +22,28 @@ public final class CommandTreeScanner {
         this.glossary = glossary;
     }
 
-    /**
-     * Processes the command tree from the server dispatcher. One-shot per connection.
-     *
-     * @param dispatcher the Brigadier command dispatcher
-     * @return result containing detected plugins and version alias information
-     */
     public CommandTreeResult processCommandTree(CommandDispatcher<?> dispatcher) {
         if (commandTreeProcessed) {
-            return new CommandTreeResult(Set.of(), false, null);
+            return new CommandTreeResult(Set.of(), Set.of(), false, null, false, 0);
         }
         commandTreeProcessed = true;
 
-        Set<String> plugins = new LinkedHashSet<>();
+        Set<String> uniqueNamespaces = new LinkedHashSet<>();
+        for (CommandNode<?> node : dispatcher.getRoot().getChildren()) {
+            String name = node.getName();
+            if (name == null || name.isEmpty()) continue;
+            if (name.contains(":")) {
+                String namespace = name.substring(0, name.indexOf(':')).toLowerCase(Locale.ROOT);
+                if (!IGNORED_NAMESPACES.contains(namespace)
+                        && !DetectionConstants.CLIENT_MOD_NAMESPACES.contains(namespace)) {
+                    uniqueNamespaces.add(namespace);
+                }
+            }
+        }
+        boolean hasNamespaces = !uniqueNamespaces.isEmpty();
+
+        Set<String> namespacedPlugins = new LinkedHashSet<>();
+        Set<String> glossaryPlugins = new LinkedHashSet<>();
         boolean versionAliasFound = false;
         String versionAliasCommand = null;
 
@@ -50,12 +55,16 @@ public final class CommandTreeScanner {
 
             if (name.contains(":")) {
                 String namespace = name.substring(0, name.indexOf(':')).toLowerCase(Locale.ROOT);
-                if (!IGNORED_NAMESPACES.contains(namespace)) {
-                    String resolved = glossary.resolve(namespace).orElse(namespace);
-                    plugins.add(resolved);
+                if (IGNORED_NAMESPACES.contains(namespace) || DetectionConstants.CLIENT_MOD_NAMESPACES.contains(namespace)) continue;
+                String resolved = glossary.resolve(namespace).or(() -> glossary.resolveFuzzy(namespace)).orElse(namespace);
+                if (resolved.equals(namespace) && !glossary.contains(namespace)) {
+                    glossary.trackUnresolved(namespace);
                 }
+                namespacedPlugins.add(resolved);
             } else {
-                glossary.resolve(lowerName).ifPresent(plugins::add);
+                if (uniqueNamespaces.size() <= 5) {
+                    glossary.resolve(lowerName).or(() -> glossary.resolveFuzzy(lowerName)).ifPresent(glossaryPlugins::add);
+                }
             }
 
             if (!versionAliasFound && VERSION_ALIAS_COMMANDS.contains(lowerName)) {
@@ -64,26 +73,26 @@ public final class CommandTreeScanner {
             }
         }
 
-        return new CommandTreeResult(Set.copyOf(plugins), versionAliasFound, versionAliasCommand);
+        return new CommandTreeResult(Set.copyOf(namespacedPlugins), Set.copyOf(glossaryPlugins),
+                versionAliasFound, versionAliasCommand, hasNamespaces, uniqueNamespaces.size());
     }
 
-    /**
-     * Resets the one-shot guard, allowing the tree to be processed again.
-     */
     public void reset() {
         commandTreeProcessed = false;
     }
 
-    /**
-     * Result of processing a command tree.
-     *
-     * @param plugins            the set of detected plugin names
-     * @param versionAliasFound  whether a version alias command was found
-     * @param versionAliasCommand the alias command that was found, or null
-     */
     public record CommandTreeResult(
-            Set<String> plugins,
+            Set<String> namespacedPlugins,
+            Set<String> glossaryPlugins,
             boolean versionAliasFound,
-            String versionAliasCommand
-    ) {}
+            String versionAliasCommand,
+            boolean hasNamespaces,
+            int namespaceCount
+    ) {
+        public Set<String> plugins() {
+            Set<String> all = new LinkedHashSet<>(namespacedPlugins);
+            all.addAll(glossaryPlugins);
+            return Set.copyOf(all);
+        }
+    }
 }

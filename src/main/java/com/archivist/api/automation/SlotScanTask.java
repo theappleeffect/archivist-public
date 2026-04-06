@@ -51,9 +51,16 @@ public class SlotScanTask implements TickTask {
     private final List<Integer> candidateSlots = new ArrayList<>();
     private int currentCandidateIndex = 0;
     private int previousSlot = 0;
+    private boolean resuming = false;
 
     @Override
     public void start(Minecraft mc) {
+        if (resuming) {
+            resuming = false;
+            phase = Phase.SWITCHING;
+            ticksInPhase = 0;
+            return;
+        }
         phase = Phase.WAITING_INVENTORY;
         ticksInPhase = 0;
         candidateSlots.clear();
@@ -95,26 +102,16 @@ public class SlotScanTask implements TickTask {
 
                     Item item = stack.getItem();
 
-                    // Priority by item type (lower = higher priority)
-                    if (item == Items.COMPASS) {
+                    if (item == Items.COMPASS || item == Items.RECOVERY_COMPASS) {
                         candidates.add(new Candidate(i, 0));
-                    } else if (item == Items.CLOCK) {
-                        candidates.add(new Candidate(i, 1));
                     } else if (item == Items.NETHER_STAR) {
+                        candidates.add(new Candidate(i, 1));
+                    } else if (item == Items.CLOCK) {
                         candidates.add(new Candidate(i, 2));
-                    } else if (item == Items.PLAYER_HEAD) {
+                    } else if (item == Items.ARROW || item == Items.SPECTRAL_ARROW || item == Items.TIPPED_ARROW) {
                         candidates.add(new Candidate(i, 3));
-                    } else if (SELECTOR_ITEMS.contains(item)) {
-                        candidates.add(new Candidate(i, 4));
                     } else {
-                        // Check name keywords for non-type matches
-                        String name = stack.getHoverName().getString().toLowerCase(Locale.ROOT);
-                        for (String keyword : SELECTOR_KEYWORDS) {
-                            if (name.contains(keyword)) {
-                                candidates.add(new Candidate(i, 5));
-                                break;
-                            }
-                        }
+                        candidates.add(new Candidate(i, 4));
                     }
                 }
 
@@ -190,7 +187,6 @@ public class SlotScanTask implements TickTask {
     public boolean resumeFromFailedGui() {
         Minecraft mc = Minecraft.getInstance();
         LocalPlayer player = mc.player;
-        // Close the current GUI
         if (mc.screen != null && player != null) {
             player.closeContainer();
         }
@@ -198,6 +194,7 @@ public class SlotScanTask implements TickTask {
         currentCandidateIndex++;
         if (currentCandidateIndex < candidateSlots.size()) {
             complete = false;
+            resuming = true;
             if (player != null) {
                 advanceToNextCandidate(player);
             }

@@ -11,13 +11,12 @@ import org.slf4j.LoggerFactory;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-/**
- * Orchestrates all detection methods and merges results into the ServerSession.
- * All results carry confidence levels and are adjusted by session confidence (lobby detection).
- */
 public final class DetectionPipeline {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("archivist");
@@ -31,9 +30,13 @@ public final class DetectionPipeline {
     private volatile ServerSession session;
     private volatile boolean scanComplete;
     private volatile String lastBrand;
+    private volatile boolean chatUrlExtractionEnabled = true;
 
     private final Set<String> commandTreePlugins = ConcurrentHashMap.newKeySet();
+    private final Set<String> commandTreeGlossaryPlugins = ConcurrentHashMap.newKeySet();
     private final Set<String> allDetectedPlugins = ConcurrentHashMap.newKeySet();
+    private final List<String> chatMessageBuffer = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private volatile String versionCommand;
 
     public DetectionPipeline(PluginGlossary glossary) {
         this.glossary = glossary;
@@ -44,30 +47,30 @@ public final class DetectionPipeline {
 
     public SessionConfidence getSessionConfidence() { return sessionConfidence; }
 
+    public void setChatUrlExtractionEnabled(boolean enabled) {
+        this.chatUrlExtractionEnabled = enabled;
+    }
+
     public void onServerJoin(ServerSession session) {
         reset();
         this.session = session;
         sessionConfidence.reset();
     }
 
-    /**
-     * Called when domain is resolved — feeds into session confidence for lobby detection.
-     */
     public void onDomainResolved(String domain) {
         sessionConfidence.onDomainKnown(domain);
     }
 
     public void onCommandTree(CommandDispatcher<?> dispatcher) {
-        // Lobby detection: second command tree MAY indicate proxy transfer
         boolean isTransfer = sessionConfidence.onCommandTree();
 
         if (isTransfer) {
-            // Discard previous detection data on transfer so the new server is evaluated fresh
             LOGGER.info("Proxy transfer detected — discarding previous detection data");
             if (session != null) {
                 session.discardDetections();
             }
             commandTreePlugins.clear();
+            commandTreeGlossaryPlugins.clear();
             allDetectedPlugins.clear();
             scanComplete = false;
             commandTreeScanner.reset();
@@ -75,9 +78,12 @@ public final class DetectionPipeline {
         }
 
         CommandTreeScanner.CommandTreeResult result = commandTreeScanner.processCommandTree(dispatcher);
-        commandTreePlugins.addAll(result.plugins());
+        commandTreePlugins.addAll(result.namespacedPlugins());
+        commandTreeGlossaryPlugins.addAll(result.glossaryPlugins());
+        if (result.versionAliasFound()) {
+            versionCommand = result.versionAliasCommand();
+        }
 
-        // Feed raw command NAMES (not resolved plugins) into session confidence for lobby heuristics
         Set<String> rawCommandNames = new java.util.HashSet<>();
         for (var node : dispatcher.getRoot().getChildren()) {
             String name = node.getName();
@@ -88,9 +94,39 @@ public final class DetectionPipeline {
         finishScan();
     }
 
-    public void onNamespace(String namespace) { namespaceDetector.onNamespace(namespace); }
-    public void onChannelNamespace(String namespace) { onNamespace(namespace); }
-    public void onRegistryNamespace(String namespace) { onNamespace(namespace); }
+    public void onNamespace(String namespace) {
+        namespaceDetector.onNamespace(namespace);
+        if (scanComplete && session != null && namespace != null) {
+            String lower = namespace.toLowerCase(Locale.ROOT);
+            if (!DetectionConstants.IGNORED_NAMESPACES.contains(lower)) {
+                String resolved = glossary.resolve(lower)
+                        .or(() -> glossary.resolveFuzzy(lower))
+                        .orElse(lower);
+                allDetectedPlugins.add(resolved);
+                session.addDetection(Detection.of(resolved, DetectionType.CHANNEL,
+                        DetectionType.CHANNEL.defaultConfidence(), "late-namespace"));
+            }
+        }
+    }
+    private static final Set<String> BRAND_NAMESPACES = Set.of(
+            "velocity", "bungeecord", "waterfall", "paper", "purpur", "spigot", "folia", "pufferfish");
+
+    public void onChannelNamespace(String namespace) {
+        if (namespace != null && BRAND_NAMESPACES.contains(namespace.toLowerCase(java.util.Locale.ROOT))) {
+            if (session != null && session.getServerSoftware() == null) {
+                String name = namespace.substring(0, 1).toUpperCase() + namespace.substring(1).toLowerCase();
+                session.setServerSoftware(name);
+                if (session.getBrand() == null || session.getBrand().isEmpty()) {
+                    session.setBrand(name);
+                }
+            }
+            return;
+        }
+        onNamespace(namespace);
+    }
+    public void onRegistryNamespace(String namespace) {
+        onChannelNamespace(namespace);
+    }
 
     public void onBrandReceived(String rawBrand) {
         if (session == null) return;
@@ -101,8 +137,6 @@ public final class DetectionPipeline {
         sessionConfidence.onBrandReceived(rawBrand);
         if (result.serverSoftware() != null) {
             session.setServerSoftware(result.serverSoftware());
-            session.addDetection(Detection.of(result.serverSoftware(),
-                    DetectionType.BRAND, "brand: " + rawBrand));
             if (result.softwareVersion() != null) {
                 session.setVersion(result.softwareVersion());
             }
@@ -110,22 +144,32 @@ public final class DetectionPipeline {
         session.getEvents().post(new LogEvent(LogEvent.Type.BRAND, "Server brand: " + rawBrand));
     }
 
-    /**
-     * Processes tab list header/footer — feeds to both URL extraction and lobby detection.
-     */
     public void onTabList(String header, String footer) {
         sessionConfidence.onTabList(header, footer);
-        if (header != null) onChatMessage(header);
-        if (footer != null) onChatMessage(footer);
+        if (header != null) extractUrls(header);
+        if (footer != null) extractUrls(footer);
     }
 
     public void onPlayerCount(int advertisedCount, int tabListCount) {
         sessionConfidence.onPlayerCount(advertisedCount, tabListCount);
     }
 
+    public List<String> getChatMessageBuffer() { return chatMessageBuffer; }
+
     public void onChatMessage(String message) {
         if (session == null || message == null) return;
+        chatMessageBuffer.add(message);
         sessionConfidence.onChatMessage(message);
+        if (awaitingVersionResponse) {
+            onVersionResponse(message);
+        }
+        if (chatUrlExtractionEnabled) {
+            extractUrls(message);
+        }
+    }
+
+    private void extractUrls(String message) {
+        if (session == null || message == null) return;
         UrlExtractor.CategorizedResult result = UrlExtractor.extract(message);
 
         for (String url : result.detectedUrls()) {
@@ -147,9 +191,6 @@ public final class DetectionPipeline {
         sessionConfidence.tick();
     }
 
-    /**
-     * Merges all detection sources with confidence levels and writes to the session.
-     */
     public synchronized void finishScan() {
         if (scanComplete) return;
         scanComplete = true;
@@ -158,33 +199,60 @@ public final class DetectionPipeline {
         Set<String> namespacePlugins = namespaceDetector.processPending();
         double sessionConf = sessionConfidence.getConfidence();
 
-        // Emit detections with confidence from each source
         if (session != null) {
-            // Command tree detections (already in commandTreePlugins)
-            for (String plugin : commandTreePlugins) {
-                String resolved = glossary.resolve(plugin.toLowerCase(Locale.ROOT)).orElse(plugin);
-                boolean namespaced = plugin.contains(":");
-                DetectionType type = namespaced ? DetectionType.COMMAND_TREE_NAMESPACED : DetectionType.COMMAND_TREE_GLOSSARY;
-                double rawConf = type.defaultConfidence();
-                double effective = sessionConf * rawConf;
-                session.addDetection(Detection.of(resolved, type, effective, "cmd: " + plugin));
-                allDetectedPlugins.add(resolved);
+            boolean isLobby = sessionConf <= 0.4;
+
+            if (!isLobby) {
+                for (String plugin : commandTreePlugins) {
+                    String resolved = glossary.resolve(plugin.toLowerCase(Locale.ROOT))
+                            .or(() -> glossary.resolveFuzzy(plugin.toLowerCase(Locale.ROOT)))
+                            .orElse(plugin);
+                    resolved = resolved.toLowerCase(Locale.ROOT);
+                    session.addDetection(Detection.of(resolved, DetectionType.COMMAND_TREE_NAMESPACED,
+                            DetectionType.COMMAND_TREE_NAMESPACED.defaultConfidence(), "cmd: " + plugin));
+                    allDetectedPlugins.add(resolved);
+                }
+
+                for (String plugin : commandTreeGlossaryPlugins) {
+                    String resolved = plugin.toLowerCase(Locale.ROOT);
+                    session.addDetection(Detection.of(resolved, DetectionType.COMMAND_TREE_GLOSSARY,
+                            DetectionType.COMMAND_TREE_GLOSSARY.defaultConfidence(), "cmd-glossary: " + plugin));
+                    allDetectedPlugins.add(resolved);
+                }
+
+                for (String plugin : namespacePlugins) {
+                    String resolved = plugin.toLowerCase(Locale.ROOT);
+                    session.addDetection(Detection.of(resolved, DetectionType.CHANNEL,
+                            DetectionType.CHANNEL.defaultConfidence(), "namespace"));
+                    allDetectedPlugins.add(resolved);
+                }
+
+                Map<String, Set<DetectionType>> sourceTypes = new java.util.HashMap<>();
+                for (String plugin : commandTreePlugins) {
+                    String resolved = glossary.resolve(plugin.toLowerCase(Locale.ROOT)).orElse(plugin);
+                    sourceTypes.computeIfAbsent(resolved, k -> new java.util.HashSet<>())
+                            .add(DetectionType.COMMAND_TREE_NAMESPACED);
+                }
+                for (String plugin : commandTreeGlossaryPlugins) {
+                    sourceTypes.computeIfAbsent(plugin.toLowerCase(Locale.ROOT), k -> new java.util.HashSet<>())
+                            .add(DetectionType.COMMAND_TREE_GLOSSARY);
+                }
+                for (String plugin : namespacePlugins) {
+                    sourceTypes.computeIfAbsent(plugin, k -> new java.util.HashSet<>())
+                            .add(DetectionType.CHANNEL);
+                }
+                for (var entry : sourceTypes.entrySet()) {
+                    if (entry.getValue().size() >= 2) {
+                        session.boostConfidence(entry.getKey(), 0.60);
+                    }
+                }
             }
 
-            // Namespace detections (channels + registry merged)
-            for (String plugin : namespacePlugins) {
-                // We don't know if it was channel or registry, use channel confidence (higher)
-                double effective = sessionConf * DetectionType.CHANNEL.defaultConfidence();
-                session.addDetection(Detection.of(plugin, DetectionType.CHANNEL, effective, "namespace"));
-                allDetectedPlugins.add(plugin);
-            }
-
-            String label = sessionConf > 0.7 ? "REAL SERVER" : sessionConf > 0.4 ? "UNCERTAIN" : "LOBBY";
+            String label = isLobby ? "LOBBY (brand only)" : (sessionConf > 0.7 ? "REAL SERVER" : "UNCERTAIN");
             session.getEvents().post(new LogEvent(LogEvent.Type.SYSTEM,
                     "Scan complete: " + allDetectedPlugins.size() + " plugins"
                             + " | Confidence: " + String.format("%.0f%%", sessionConf * 100) + " (" + label + ")"));
 
-            // Log key lobby/server signals
             for (var s : sessionConfidence.getLobbySignals()) {
                 session.getEvents().post(new LogEvent(LogEvent.Type.SYSTEM,
                         "  \u2193 " + String.format("-%.0f%%", s.weight() * 100) + " " + s.reason()));
@@ -195,35 +263,33 @@ public final class DetectionPipeline {
             }
         }
 
-        LOGGER.info("Detection scan complete: {} plugins, session confidence: {:.2f}",
-                allDetectedPlugins.size(), sessionConf);
+        LOGGER.info("Detection scan complete: {} plugins, session confidence: {}",
+                allDetectedPlugins.size(), String.format("%.2f", sessionConf));
     }
 
     public boolean isScanComplete() { return scanComplete; }
     public Set<String> getAllDetectedPlugins() { return Set.copyOf(allDetectedPlugins); }
 
-    /**
-     * Re-scans using the cached command dispatcher and brand. Unlike reset()+onServerJoin(),
-     * this re-processes data that was already received so results are not lost.
-     */
     public void rescan(ServerSession session, CommandDispatcher<?> dispatcher) {
-        // Clear detection results but keep the session reference
         scanComplete = false;
         this.session = session;
         commandTreePlugins.clear();
+        commandTreeGlossaryPlugins.clear();
         allDetectedPlugins.clear();
         commandTreeScanner.reset();
         namespaceDetector.reset();
-        // Do NOT reset sessionConfidence — lobby detection signals are still valid
 
         if (session != null) {
             session.discardDetections();
         }
 
-        // Re-process command tree if available
         if (dispatcher != null) {
             CommandTreeScanner.CommandTreeResult result = commandTreeScanner.processCommandTree(dispatcher);
-            commandTreePlugins.addAll(result.plugins());
+            commandTreePlugins.addAll(result.namespacedPlugins());
+            commandTreeGlossaryPlugins.addAll(result.glossaryPlugins());
+            if (result.versionAliasFound()) {
+                versionCommand = result.versionAliasCommand();
+            }
 
             Set<String> rawCommandNames = new java.util.HashSet<>();
             for (var node : dispatcher.getRoot().getChildren()) {
@@ -233,13 +299,10 @@ public final class DetectionPipeline {
             sessionConfidence.onCommandsDetected(rawCommandNames);
         }
 
-        // Re-process brand if cached in session
         if (session != null && session.getBrand() != null) {
             BrandDetector.BrandResult result = brandDetector.parseBrand(session.getBrand());
             if (result.serverSoftware() != null) {
                 session.setServerSoftware(result.serverSoftware());
-                session.addDetection(Detection.of(result.serverSoftware(),
-                        DetectionType.BRAND, "brand: " + session.getBrand()));
                 if (result.softwareVersion() != null) {
                     session.setVersion(result.softwareVersion());
                 }
@@ -249,14 +312,49 @@ public final class DetectionPipeline {
         finishScan();
     }
 
+    private static final Pattern VERSION_RESPONSE_PATTERN = Pattern.compile(
+            "(?:running|version)[:\\s]+(\\S+)\\s+(?:version\\s+)?(.+?)(?:\\s*\\(MC:.*\\))?$",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    private volatile boolean awaitingVersionResponse = false;
+
+    public void startVersionProbe() { awaitingVersionResponse = true; }
+
+    public void onVersionResponse(String message) {
+        if (!awaitingVersionResponse || session == null || message == null) return;
+        Matcher m = VERSION_RESPONSE_PATTERN.matcher(message);
+        if (m.find()) {
+            String software = m.group(1);
+            String version = m.group(2).trim();
+            if (session.getServerSoftware() == null || session.getServerSoftware().isEmpty()) {
+                session.setServerSoftware(software);
+            }
+            if (version != null && !version.isEmpty()) {
+                session.setVersion(version);
+            }
+            session.getEvents().post(new LogEvent(LogEvent.Type.SYSTEM,
+                    "Version probe: " + software + " " + version));
+            awaitingVersionResponse = false;
+        }
+    }
+
     public void reset() {
+        glossary.saveUnresolved();
         scanComplete = false;
         session = null;
         lastBrand = null;
+        chatUrlExtractionEnabled = true;
+        chatMessageBuffer.clear();
+        versionCommand = null;
+        awaitingVersionResponse = false;
         commandTreePlugins.clear();
+        commandTreeGlossaryPlugins.clear();
         allDetectedPlugins.clear();
         commandTreeScanner.reset();
         namespaceDetector.reset();
         sessionConfidence.reset();
     }
+
+    public String getVersionCommand() { return versionCommand; }
 }
