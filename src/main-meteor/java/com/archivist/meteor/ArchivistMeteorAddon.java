@@ -25,8 +25,6 @@ public class ArchivistMeteorAddon extends MeteorAddon {
     public void onInitialize() {
         LOG.info("Initializing Archivist Meteor Addon");
 
-        Modules.get().registerCategory(CATEGORY);
-
         Modules.get().add(new InfoModule());
         Modules.get().add(new PluginsModule());
         Modules.get().add(new ExportModule());
@@ -34,6 +32,11 @@ public class ArchivistMeteorAddon extends MeteorAddon {
         Modules.get().add(new AutomationModule());
 
         LOG.info("Archivist Meteor Addon initialized");
+    }
+
+    @Override
+    public void onRegisterCategories() {
+        Modules.registerCategory(CATEGORY);
     }
 
     @Override
